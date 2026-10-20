@@ -507,7 +507,7 @@ class SchoolDB:
                 )
                 
         # Ensure default subjects exist without overwriting custom changes
-        for name in DEFAULT_SUBJECTS:
+        for name in ["Mathematics", "English", "Physics"]:
             self.conn.execute(
                 "INSERT OR IGNORE INTO subjects(code, name) VALUES (?,?)",
                 (subject_code(name), name),
