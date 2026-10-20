@@ -42,8 +42,7 @@ from typing import List, Optional, Dict, Any
 
 
 DEFAULT_STREAMS = [
-    "White", "Purple", "Red", "Indigo", "Silver",
-    "Orange", "Green", "Maroon", "Amber", "Yellow",
+    "White", "Purple", "Green",
 ]
 
 DEFAULT_SUBJECTS = [
