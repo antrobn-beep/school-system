@@ -494,22 +494,26 @@ class SchoolDB:
 
     def _seed_defaults(self):
         cur = self.conn.cursor()
-        cur.execute("SELECT COUNT(*) AS c FROM forms")
-        if cur.execute("SELECT COUNT(*) AS c FROM forms").fetchone()["c"] == 0:
-            for n in (1, 2, 3, 4):
-                self.conn.execute("INSERT INTO forms(number) VALUES (?)", (n,))
-                for name in DEFAULT_STREAMS:
-                    code = name[0].upper()
-                    self.conn.execute(
-                        "INSERT INTO streams(form_number, code, name) VALUES (?,?,?)",
-                        (n, code, name),
-                    )
-        if cur.execute("SELECT COUNT(*) AS c FROM subjects").fetchone()["c"] == 0:
-            for name in DEFAULT_SUBJECTS:
+        
+        # Ensure forms 1 to 4 exist without resetting anything
+        for n in (1, 2, 3, 4):
+            self.conn.execute("INSERT OR IGNORE INTO forms(number) VALUES (?)", (n,))
+            
+            # Ensure default streams exist for each form
+            for name in DEFAULT_STREAMS:
+                code = name[0].upper()
                 self.conn.execute(
-                    "INSERT INTO subjects(code, name) VALUES (?,?)",
-                    (subject_code(name), name),
+                    "INSERT OR IGNORE INTO streams(form_number, code, name) VALUES (?,?,?)",
+                    (n, code, name),
                 )
+                
+        # Ensure default subjects exist without overwriting custom changes
+        for name in DEFAULT_SUBJECTS:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO subjects(code, name) VALUES (?,?)",
+                (subject_code(name), name),
+            )
+            
         self.conn.commit()
 
     # ------------------------------------------------------------------
