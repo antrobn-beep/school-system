@@ -1432,7 +1432,7 @@ class SchoolDB:
 
     def is_account_locked(self, staff_no: str) -> bool:
         row = self.conn.execute("SELECT account_locked FROM teachers WHERE staff_no=?", (staff_no,)).fetchone()
-        return bool(row and row["account_locked"])
+        return bool(row and row[0])
 
     def set_account_locked(self, staff_no: str, locked: bool, requested_by: str):
         if not self.has_full_oversight(requested_by):
