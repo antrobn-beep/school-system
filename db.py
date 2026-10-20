@@ -103,7 +103,7 @@ class SchoolDB:
             import os
             if path != ":memory:" and os.path.exists(path):
                 os.remove(path)
-self.conn = sqlite3.connect(path, timeout=30.0)
+        self.conn = sqlite3.connect(path, timeout=30.0)
         self.conn.execute("PRAGMA foreign_keys = ON")
         self._init_schema()
         self._migrate()
