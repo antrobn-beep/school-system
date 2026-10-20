@@ -45,10 +45,7 @@ DEFAULT_STREAMS = [
     "White", "Purple", "Green",
 ]
 
-DEFAULT_SUBJECTS = [
-    "Maths", "English", "Kiswahili", "Biology", "Chemistry",
-    "Physics", "Geography", "History", "CRE", "Aviation",
-]
+
 
 SUBJECT_CODE_OVERRIDES = {"cre": "CRE", "english": "ENG", "kiswahili": "KIS", "aviation": "AVI"}
 
