@@ -694,7 +694,7 @@ class SchoolDB:
         row = self.conn.execute(
             "SELECT password_hash, password_salt FROM teachers WHERE staff_no=?", (staff_no,)
         ).fetchone()
-        if row is None or not row["password_hash"]:
+        if row is None or not row[3]: # (or whatever index password_hash is in your SELECT query)
             return False
         candidate = hashlib.pbkdf2_hmac(
             "sha256", password.encode(), bytes.fromhex(row["password_salt"]), 100_000
