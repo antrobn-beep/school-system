@@ -668,7 +668,7 @@ class SchoolDB:
             "SELECT staff_no FROM teachers WHERE staff_no=? OR LOWER(email)=?",
             (identifier, identifier.strip().lower()),
         ).fetchone()
-        return row["staff_no"] if row else None
+        return row[0] if row else None
 
     def set_password(self, staff_no: str, password: str, force_reset: bool = False):
         self._require_teacher(staff_no)
