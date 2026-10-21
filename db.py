@@ -42,10 +42,14 @@ from typing import List, Optional, Dict, Any
 
 
 DEFAULT_STREAMS = [
-    "White", "Purple", "Green",
+    "White", "Purple", "Red", "Indigo", "Silver",
+    "Orange", "Green", "Maroon", "Amber", "Yellow",
 ]
 
-
+DEFAULT_SUBJECTS = [
+    "Maths", "English", "Kiswahili", "Biology", "Chemistry",
+    "Physics", "Geography", "History", "CRE", "Aviation",
+]
 
 SUBJECT_CODE_OVERRIDES = {"cre": "CRE", "english": "ENG", "kiswahili": "KIS", "aviation": "AVI"}
 
@@ -103,7 +107,8 @@ class SchoolDB:
             import os
             if path != ":memory:" and os.path.exists(path):
                 os.remove(path)
-        self.conn = sqlite3.connect(path, timeout=30.0)
+        self.conn = sqlite3.connect(path)
+        self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self._init_schema()
         self._migrate()
@@ -493,26 +498,22 @@ class SchoolDB:
 
     def _seed_defaults(self):
         cur = self.conn.cursor()
-        
-        # Ensure forms 1 to 4 exist without resetting anything
-        for n in (1, 2, 3, 4):
-            self.conn.execute("INSERT OR IGNORE INTO forms(number) VALUES (?)", (n,))
-            
-            # Ensure default streams exist for each form
-            for name in DEFAULT_STREAMS:
-                code = name[0].upper()
+        cur.execute("SELECT COUNT(*) AS c FROM forms")
+        if cur.execute("SELECT COUNT(*) AS c FROM forms").fetchone()["c"] == 0:
+            for n in (1, 2, 3, 4):
+                self.conn.execute("INSERT INTO forms(number) VALUES (?)", (n,))
+                for name in DEFAULT_STREAMS:
+                    code = name[0].upper()
+                    self.conn.execute(
+                        "INSERT INTO streams(form_number, code, name) VALUES (?,?,?)",
+                        (n, code, name),
+                    )
+        if cur.execute("SELECT COUNT(*) AS c FROM subjects").fetchone()["c"] == 0:
+            for name in DEFAULT_SUBJECTS:
                 self.conn.execute(
-                    "INSERT OR IGNORE INTO streams(form_number, code, name) VALUES (?,?,?)",
-                    (n, code, name),
+                    "INSERT INTO subjects(code, name) VALUES (?,?)",
+                    (subject_code(name), name),
                 )
-                
-        # Ensure default subjects exist without overwriting custom changes
-        for name in ["Mathematics", "English", "Physics"]:
-            self.conn.execute(
-                "INSERT OR IGNORE INTO subjects(code, name) VALUES (?,?)",
-                (subject_code(name), name),
-            )
-            
         self.conn.commit()
 
     # ------------------------------------------------------------------
@@ -668,7 +669,7 @@ class SchoolDB:
             "SELECT staff_no FROM teachers WHERE staff_no=? OR LOWER(email)=?",
             (identifier, identifier.strip().lower()),
         ).fetchone()
-        return row[0] if row else None
+        return row["staff_no"] if row else None
 
     def set_password(self, staff_no: str, password: str, force_reset: bool = False):
         self._require_teacher(staff_no)
@@ -694,7 +695,7 @@ class SchoolDB:
         row = self.conn.execute(
             "SELECT password_hash, password_salt FROM teachers WHERE staff_no=?", (staff_no,)
         ).fetchone()
-        if row is None or not row[3]: # (or whatever index password_hash is in your SELECT query)
+        if row is None or not row["password_hash"]:
             return False
         candidate = hashlib.pbkdf2_hmac(
             "sha256", password.encode(), bytes.fromhex(row["password_salt"]), 100_000
@@ -1432,7 +1433,7 @@ class SchoolDB:
 
     def is_account_locked(self, staff_no: str) -> bool:
         row = self.conn.execute("SELECT account_locked FROM teachers WHERE staff_no=?", (staff_no,)).fetchone()
-        return bool(row and row[0])
+        return bool(row and row["account_locked"])
 
     def set_account_locked(self, staff_no: str, locked: bool, requested_by: str):
         if not self.has_full_oversight(requested_by):
@@ -2024,9 +2025,13 @@ class SchoolDB:
     # student profile updates
     # ------------------------------------------------------------------
     def update_student(self, adm_no: str, first_name: Optional[str] = None, last_name: Optional[str] = None,
-                        form_number: Optional[int] = None, stream_name_or_code: Optional[str] = None):
+                        form_number: Optional[int] = None, stream_name_or_code: Optional[str] = None,
+                        gender: Optional[str] = None):
         if not self.conn.execute("SELECT 1 FROM students WHERE adm_no=?", (adm_no,)).fetchone():
             raise NotFound(f"No such student '{adm_no}'.")
+        if gender is not None:  # '' clears it
+            self.conn.execute("UPDATE students SET gender=? WHERE adm_no=?",
+                              (gender.strip().upper()[:1] or None, adm_no))
         if first_name is not None:
             self.conn.execute("UPDATE students SET first_name=? WHERE adm_no=?", (first_name.strip(), adm_no))
         if last_name is not None:
