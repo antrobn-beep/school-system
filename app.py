@@ -16,6 +16,7 @@ Then open http://localhost:5000
 """
 
 import os
+from html import escape as esc
 import tempfile
 from flask import Flask, request, session, redirect, url_for, render_template_string, send_file, flash
 
@@ -197,6 +198,37 @@ STYLE = """
     justify-content: center; font-size: 26px; margin-bottom: 6px; }
   .app-name { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 15px; color: var(--navy); }
   .app-desc { font-size: 12px; color: var(--ink-muted); line-height: 1.4; }
+  .tabs { display:flex; flex-wrap:wrap; gap:4px; margin:0 0 18px; border-bottom:1px solid var(--border); }
+  .tabs a { padding:9px 16px; text-decoration:none; color:var(--ink-muted); font-weight:600; font-size:13px;
+    border-bottom:2px solid transparent; margin-bottom:-1px; }
+  .tabs a:hover { color:var(--navy); }
+  .tabs a.active { color:var(--navy); border-bottom-color:var(--gold); }
+  .hint { font-size:12px; color:var(--ink-muted); margin:0 0 12px; }
+  .chip-row { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }
+  .chip { display:inline-flex; gap:6px; align-items:center; background:var(--card); border:1px solid var(--border);
+    border-radius:20px; padding:5px 12px; font-size:13px; }
+  .split { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:14px; }
+  .split form { margin:0; }
+  .toggle-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(190px,1fr)); gap:12px; }
+  .toggle-card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:14px;
+    display:flex; flex-direction:column; gap:8px; }
+  .toggle-card .state { font-size:12px; font-weight:600; }
+  .toggle-card form { margin:0; padding:0; border:none; background:transparent; }
+  .grid-wrap { max-height:64vh; overflow:auto; border:1px solid var(--border); border-radius:10px; background:var(--card); }
+  .grid-wrap table, .grid-wrap thead, .grid-wrap tbody, .grid-wrap tr { display:revert; width:auto; table-layout:auto; }
+  .grid-wrap table { width:100%; margin:0; border:none; white-space:nowrap; }
+  .grid-wrap th { position:sticky; top:0; z-index:2; }
+  .grid-wrap td { padding:3px 6px; }
+  .grid-wrap form { display:inline-flex; padding:0; border:none; background:transparent; margin:0 4px 0 0; }
+  .grid-form { display:block !important; padding:0 !important; border:none !important;
+    background:transparent !important; margin:0 0 14px !important; }
+  .grid-wrap input.cell, .grid-wrap select.cell { width:100%; min-width:80px; border:1px solid transparent;
+    background:transparent; padding:5px 7px; border-radius:6px; font:inherit; }
+  .grid-wrap input.cell:hover, .grid-wrap select.cell:hover { border-color:var(--border); background:#fff; }
+  .grid-wrap input.cell:focus, .grid-wrap select.cell:focus { border-color:var(--gold); background:#fff; outline:none; }
+  .grid-wrap input.narrow { min-width:0; width:46px; text-align:center; }
+  .grid-actions { margin-top:10px; }
+  .btn-danger { background:var(--danger) !important; padding:5px 10px !important; font-size:12px !important; }
   .app-badge { position: absolute; top: 12px; right: 12px; background: var(--danger); color: #fff; font-size: 11px;
     font-weight: 700; border-radius: 20px; padding: 2px 8px; }
 </style>
@@ -3250,5 +3282,4 @@ def department_performance_pdf():
 
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(debug=True, port=5000)
