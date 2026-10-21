@@ -45,8 +45,8 @@ STYLE = """
   :root {
     --ink: #1B2333;
     --ink-muted: #6B7686;
-    --navy: #1F2A44;
-    --navy-2: #2B3A55;
+    --green: #1F2A44;
+    --green-2: #2B3A55;
     --gold: #C9A227;
     --gold-soft: #F5EBC7;
     --paper: #F4F6F9;
