@@ -25,10 +25,19 @@ from auth import login as db_login, TeacherSession
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SCHOOL_APP_SECRET", "dev-secret-change-me")
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,          # page scripts can't read the session cookie
+    SESSION_COOKIE_SAMESITE="Lax",         # not sent on cross-site POSTs
+    SESSION_COOKIE_SECURE=os.environ.get("SCHOOL_APP_HTTPS") == "1",  # set to 1 once behind HTTPS
+)
 
-DB_PATH = "school.db"
-UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads", "receipts")
+# Where the data lives. Locally these default to the project folder; on a host with a
+# persistent disk (e.g. Render) point them at the disk with SCHOOL_DB_PATH / SCHOOL_UPLOAD_DIR.
+DB_PATH = os.environ.get("SCHOOL_DB_PATH", "school.db")
+UPLOAD_DIR = os.environ.get("SCHOOL_UPLOAD_DIR") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "uploads", "receipts")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
 
 
 def get_db():
@@ -219,10 +228,11 @@ STYLE = """
   .grid-wrap table { width:100%; margin:0; border:none; white-space:nowrap; }
   .grid-wrap th { position:sticky; top:0; z-index:2; }
   .grid-wrap td { padding:3px 6px; }
+  .grid-wrap td.wrap { white-space:normal; min-width:110px; max-width:230px; font-size:12px; }
   .grid-wrap form { display:inline-flex; padding:0; border:none; background:transparent; margin:0 4px 0 0; }
   .grid-form { display:block !important; padding:0 !important; border:none !important;
     background:transparent !important; margin:0 0 14px !important; }
-  .grid-wrap input.cell, .grid-wrap select.cell { width:100%; min-width:80px; border:1px solid transparent;
+  .grid-wrap input.cell, .grid-wrap select.cell { width:100%; min-width:120px; border:1px solid transparent;
     background:transparent; padding:5px 7px; border-radius:6px; font:inherit; }
   .grid-wrap input.cell:hover, .grid-wrap select.cell:hover { border-color:var(--border); background:#fff; }
   .grid-wrap input.cell:focus, .grid-wrap select.cell:focus { border-color:var(--gold); background:#fff; outline:none; }
@@ -895,40 +905,104 @@ def students_view():
         except (PermissionDenied, NotFound) as e:
             flash(str(e))
 
+    if request.method == "POST" and request.form.get("action") == "save_student_grid":
+        if not oversight:
+            flash("Only an executive may edit student details.")
+        elif request.form.get("remove"):
+            try:
+                db.remove_student_permanently(request.form["remove"], staff_no)
+                flash("Student permanently removed.")
+            except (PermissionDenied, NotFound) as e:
+                flash(str(e))
+        else:
+            changed, errors, i = 0, [], 0
+            while f"orig_{i}" in request.form:
+                orig = request.form[f"orig_{i}"]
+                fn = request.form.get(f"fn_{i}", "").strip()
+                ln = request.form.get(f"ln_{i}", "").strip()
+                fm = request.form.get(f"fm_{i}", "").strip()
+                st = request.form.get(f"st_{i}", "").strip()
+                gd = request.form.get(f"gd_{i}", "")
+                i += 1
+                row = db.conn.execute(
+                    "SELECT first_name, last_name, form_number, stream_code, gender FROM students WHERE adm_no=?",
+                    (orig,)).fetchone()
+                if not row or not fn or not ln:
+                    continue
+                class_changed = (fm, st.upper()) != (str(row["form_number"]), row["stream_code"])
+                if (fn, ln, gd) == (row["first_name"], row["last_name"], row["gender"] or "") and not class_changed:
+                    continue
+                try:
+                    db.update_student(orig, first_name=fn, last_name=ln,
+                                      form_number=int(fm) if class_changed else None,
+                                      stream_name_or_code=st if class_changed else None,
+                                      gender=gd if gd != (row["gender"] or "") else None)
+                    changed += 1
+                except (NotFound, ValueError) as e:
+                    errors.append(f"{orig}: {e}")
+            msg = f"Saved {changed} student change(s)."
+            if errors:
+                msg += " Not saved -- " + "; ".join(errors)
+            flash(msg)
+
     grid_form = request.values.get("grid_form", "")
     grid = db.student_grid(int(grid_form)) if grid_form else db.student_grid()
     db.close()
 
-    rows = "".join(
-        f"<tr><td>{r['adm_no']}</td><td>{r['name']}</td><td>{r['class_code']}</td><td>{r['type']}</td>"
+    result_rows = "".join(
+        f"<tr><td>{r['adm_no']}</td><td>{esc(r['name'])}</td><td>{r['class_code']}</td><td>{r['type']}</td>"
         f"<td><a href='{url_for('student_detail', adm_no=r['adm_no'])}'>View</a></td></tr>"
         for r in results
     )
-
-    grid_rows = "".join(
-        f"<tr><td class='mono'>{s['adm_no']}</td><td>{s['first_name']} {s['last_name']}</td>"
-        f"<td>{s['form_number']}{s['stream_code']}</td><td>{s['gender'] or '-'}</td>"
-        f"<td><a href='{url_for('student_detail', adm_no=s['adm_no'])}'>View</a></td>"
-        + (
-            f"<td><form method='post' style='margin:0' "
-            f"onsubmit=\"return confirm('Permanently remove {s['first_name']} {s['last_name']}? This cannot be undone.')\">"
-            f"<input type='hidden' name='action' value='remove_student'>"
-            f"<input type='hidden' name='adm_no' value='{s['adm_no']}'>"
-            f"<button type='submit'>Remove permanently</button></form></td>"
-            if oversight else "<td></td>"
-        )
-        + "</tr>"
-        for s in grid
+    results_html = (
+        "<div class='grid-wrap' style='max-height:240px;margin-bottom:16px'><table><thead><tr><th>Adm No</th>"
+        "<th>Name</th><th>Class</th><th>Type</th><th></th></tr></thead><tbody>" + result_rows + "</tbody></table></div>"
+        if results else ""
     )
 
-    add_section = f"""
+    def _student_row(i, s):
+        view = f"<a href='{url_for('student_detail', adm_no=s['adm_no'])}'>View</a>"
+        if not oversight:
+            return (f"<tr><td class='mono'>{s['adm_no']}</td><td>{esc(s['first_name'])} {esc(s['last_name'])}</td>"
+                    f"<td>{s['form_number']}{s['stream_code']}</td><td>{s['gender'] or '-'}</td><td>{view}</td></tr>")
+        g = s["gender"] or ""
+        opts = "".join(
+            "<option value='" + v + "'" + (" selected" if v == g else "") + ">" + (v or "-") + "</option>"
+            for v in ("", "M", "F"))
+        return (
+            "<tr>"
+            f"<td><input type='hidden' name='orig_{i}' value='{esc(s['adm_no'])}'><span class='mono'>{esc(s['adm_no'])}</span></td>"
+            f"<td><input class='cell' name='fn_{i}' value='{esc(s['first_name'])}'></td>"
+            f"<td><input class='cell' name='ln_{i}' value='{esc(s['last_name'])}'></td>"
+            f"<td><input class='cell narrow' name='fm_{i}' value='{s['form_number']}'></td>"
+            f"<td><input class='cell narrow' name='st_{i}' value='{esc(s['stream_code'])}'></td>"
+            f"<td><select class='cell' name='gd_{i}'>{opts}</select></td>"
+            f"<td>{view}</td>"
+            f"<td><button type='submit' name='remove' value='{esc(s['adm_no'])}' class='btn-danger' "
+            "onclick=\"return confirm('Permanently remove this student and all their records? This cannot be undone.')\">Remove</button></td>"
+            "</tr>"
+        )
+
+    rows_html = "".join(_student_row(i, s) for i, s in enumerate(grid)) or "<tr><td colspan='8'>No students yet.</td></tr>"
+    if oversight:
+        heads = "<th>Adm No</th><th>First name</th><th>Last name</th><th>Form</th><th>Stream</th><th>Gender</th><th></th><th></th>"
+        grid_html = (
+            f"<form method='post' class='grid-form' action='?grid_form={esc(grid_form)}'>"
+            "<input type='hidden' name='action' value='save_student_grid'>"
+            "<button type='submit' style='position:absolute;left:-9999px' tabindex='-1' aria-hidden='true'>Save</button>"
+            f"<div class='grid-wrap'><table><thead><tr>{heads}</tr></thead><tbody>{rows_html}</tbody></table></div>"
+            "<div class='grid-actions'><button type='submit'>Save changes</button></div></form>"
+        )
+    else:
+        heads = "<th>Adm No</th><th>Name</th><th>Class</th><th>Gender</th><th></th>"
+        grid_html = f"<div class='grid-wrap'><table><thead><tr>{heads}</tr></thead><tbody>{rows_html}</tbody></table></div>"
+
+    add_section = """
     <h3>Add student</h3>
     <form method="post">
       <input type="hidden" name="action" value="add">
-      First name: <input name="first_name">
-      Last name: <input name="last_name">
-      Form: <input name="form_number" size="2" value="1">
-      Stream: <input name="stream" size="8" value="White">
+      First name: <input name="first_name"> Last name: <input name="last_name">
+      Form: <input name="form_number" size="2" value="1"> Stream: <input name="stream" size="8" value="White">
       Gender: <select name="gender"><option value="">-</option><option value="M">M</option><option value="F">F</option></select>
       <button type="submit">Add</button>
     </form>
@@ -939,32 +1013,24 @@ def students_view():
     """
 
     body = f"""
-    <h3>Search students</h3>
     <form method="post">
       <input type="hidden" name="action" value="search">
-      Query: <input name="query">
-      Include alumni: <input type="checkbox" name="include_alumni">
+      Search: <input name="query" placeholder="name or admission number">
+      <label style="font-size:12px"><input type="checkbox" name="include_alumni"> include alumni</label>
       <button type="submit">Search</button>
+      <span style="margin-left:auto"></span>
     </form>
-    <table border="1" cellpadding="4"><tr><th>Adm No</th><th>Name</th><th>Class</th><th>Type</th><th></th></tr>
-    {rows}</table>
+    {results_html}
 
+    <h3>All students</h3>
+    {"<p class='hint'>Edit any cell directly, then press Save changes.</p>" if oversight else ""}
+    <form method="get" style="margin-bottom:10px">
+      Show form: <input name="grid_form" size="2" value="{esc(grid_form)}"> <button type="submit">Filter</button>
+    </form>
+    {grid_html}
     {add_section}
-
-    <h3>All students (grid)</h3>
-    <form method="get">
-      Form (optional): <input name="grid_form" size="2" value="{grid_form}">
-      <button type="submit">Filter</button>
-    </form>
-    <div style="max-height:520px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">
-      <table style="margin-bottom:0">
-        <thead><tr><th>Adm No</th><th>Name</th><th>Class</th><th>Gender</th><th></th>{"<th></th>" if oversight else ""}</tr></thead>
-        <tbody>{grid_rows or "<tr><td colspan=6>No students yet.</td></tr>"}</tbody>
-      </table>
-    </div>
     """
     return page("Students", body)
-
 
 @app.route("/students/<adm_no>", methods=["GET", "POST"])
 def student_detail(adm_no):
@@ -1313,6 +1379,36 @@ def staff_view():
                 db.decide_leave(int(request.form["leave_id"]), staff_no,
                                  approve=request.form["decision"] == "approve")
                 flash("Leave request updated.")
+            elif action == "save_teacher_grid":
+                if not oversight:
+                    flash("Only an executive may edit staff details.")
+                elif request.form.get("remove"):
+                    db.remove_teacher_permanently(request.form["remove"], staff_no)
+                    flash(f"Teacher {request.form['remove']} permanently removed.")
+                else:
+                    changed, errors, i = 0, [], 0
+                    while f"orig_{i}" in request.form:
+                        orig = request.form[f"orig_{i}"]
+                        sn = request.form.get(f"sn_{i}", orig).strip() or orig
+                        fn = request.form.get(f"fn_{i}", "").strip()
+                        ln = request.form.get(f"ln_{i}", "").strip()
+                        i += 1
+                        row = db.conn.execute("SELECT first_name, last_name FROM teachers WHERE staff_no=?",
+                                              (orig,)).fetchone()
+                        if row and fn and ln and (sn, fn, ln) != (orig, row["first_name"], row["last_name"]):
+                            try:
+                                new_no = db.update_teacher(orig, new_staff_no=sn if sn != orig else None,
+                                                           first_name=fn, last_name=ln)
+                                if orig == session.get("staff_no"):
+                                    session["staff_no"] = new_no
+                                    staff_no = new_no
+                                changed += 1
+                            except (NotFound, ValueError) as e:
+                                errors.append(f"{orig}: {e}")
+                    msg = f"Saved {changed} staff change(s)."
+                    if errors:
+                        msg += " Not saved -- " + "; ".join(errors)
+                    flash(msg)
             elif action == "edit_teacher":
                 if not oversight:
                     flash("Only an executive may edit a teacher's name or staff number.")
@@ -1345,56 +1441,34 @@ def staff_view():
     # ---- Tier 1: full oversight sees everything, including everyone's roles ----
     if oversight:
         grid = db.teacher_grid()
-        edit_target = request.args.get("edit_staff_no", "")
-        edit_teacher_row = None
-        if edit_target:
-            edit_teacher_row = db.conn.execute(
-                "SELECT staff_no, first_name, last_name FROM teachers WHERE staff_no=?", (edit_target,)
-            ).fetchone()
+        cur = {r["staff_no"]: r for r in db.conn.execute("SELECT staff_no, first_name, last_name FROM teachers")}
 
-        roster_rows = "".join(
-            f"<tr><td class='mono'>{t['staff_no']}</td><td>{t['name']}</td>"
-            f"<td>{', '.join(r.replace('_',' ') for r in t['roles']) or '-'}</td>"
-            f"<td>{', '.join(t['class_teacher_of']) or '-'}</td>"
-            f"<td>{', '.join(t['supervises_forms']) or '-'}</td>"
-            f"<td>{', '.join(t['teaching']) or '-'}</td>"
-            f"<td><a href='{url_for('staff_view')}?edit_staff_no={t['staff_no']}#edit-teacher'>Edit</a></td>"
-            f"<td><form method='post' style='margin:0' "
-            f"onsubmit=\"return confirm('Permanently remove {t['name']}? This cannot be undone.')\">"
-            f"<input type='hidden' name='action' value='remove_teacher'>"
-            f"<input type='hidden' name='target_staff_no' value='{t['staff_no']}'>"
-            f"<button type='submit'>Remove permanently</button></form></td></tr>"
-            for t in grid
-        )
-
-        if edit_teacher_row:
-            edit_form = f"""
-            <a name="edit-teacher"></a>
-            <h3>Edit teacher (name / staff number)</h3>
-            <form method='post'>
-              <input type='hidden' name='action' value='edit_teacher'>
-              <input type='hidden' name='target_staff_no' value='{edit_teacher_row["staff_no"]}'>
-              Staff No: <input name='new_staff_no' value='{edit_teacher_row["staff_no"]}'>
-              First name: <input name='first_name' value='{edit_teacher_row["first_name"]}'>
-              Last name: <input name='last_name' value='{edit_teacher_row["last_name"]}'>
-              <button type='submit'>Save</button>
-            </form>
-            <p style="font-size:12px;color:var(--ink-muted)">Editing {edit_teacher_row['first_name']} {edit_teacher_row['last_name']}
-              ({edit_teacher_row['staff_no']}). <a href="{url_for('staff_view')}">Cancel</a></p>
-            """
-        else:
-            edit_form = """
-            <a name="edit-teacher"></a>
-            <h3>Edit teacher (name / staff number)</h3>
-            <p style="font-size:12px;color:var(--ink-muted)">Click "Edit" next to a teacher in the grid above to load their current details here.</p>
-            """
+        def _staff_row(i, t):
+            c = cur[t["staff_no"]]
+            return (
+                "<tr>"
+                f"<td><input type='hidden' name='orig_{i}' value='{esc(t['staff_no'])}'>"
+                f"<input class='cell mono' name='sn_{i}' value='{esc(t['staff_no'])}'></td>"
+                f"<td><input class='cell' name='fn_{i}' value='{esc(c['first_name'])}'></td>"
+                f"<td><input class='cell' name='ln_{i}' value='{esc(c['last_name'])}'></td>"
+                f"<td class='wrap'>{', '.join(r.replace('_', ' ') for r in t['roles']) or '-'}</td>"
+                f"<td class='wrap'>{', '.join(t['class_teacher_of']) or '-'}</td>"
+                f"<td class='wrap'>{', '.join(t['supervises_forms']) or '-'}</td>"
+                f"<td class='wrap'>{', '.join(t['teaching']) or '-'}</td>"
+                f"<td><button type='submit' name='remove' value='{esc(t['staff_no'])}' class='btn-danger' "
+                "onclick=\"return confirm('Permanently remove this teacher? This cannot be undone.')\">Remove</button></td>"
+                "</tr>"
+            )
 
         roster_section = (
-            "<h3>Staff grid</h3>"
-            "<table border='1' cellpadding='4'><tr><th>Staff No</th><th>Name</th><th>Roles</th>"
-            "<th>Class Teacher Of</th><th>Supervises</th><th>Teaching (Subject, Class)</th><th></th><th></th></tr>"
-            f"{roster_rows}</table>"
-            f"{edit_form}"
+            "<h3>Staff</h3><p class='hint'>Edit names or staff numbers directly in the table, then press "
+            "Save changes.</p>"
+            "<form method='post' class='grid-form'><input type='hidden' name='action' value='save_teacher_grid'>"
+            "<button type='submit' style='position:absolute;left:-9999px' tabindex='-1' aria-hidden='true'>Save</button>"
+            "<div class='grid-wrap'><table><thead><tr><th>Staff No</th><th>First name</th><th>Last name</th>"
+            "<th>Roles</th><th>Class teacher of</th><th>Supervises</th><th>Teaching</th><th></th></tr></thead>"
+            "<tbody>" + "".join(_staff_row(i, t) for i, t in enumerate(grid)) + "</tbody></table></div>"
+            "<div class='grid-actions'><button type='submit'>Save changes</button></div></form>"
         )
         adm_criteria = db.get_id_criteria("admission")
         staff_criteria = db.get_id_criteria("staff")
@@ -2815,115 +2889,102 @@ def academic_setup_view():
         n: db.conn.execute("SELECT code, name FROM streams WHERE form_number=? ORDER BY code", (n,)).fetchall()
         for n in (1, 2, 3, 4)
     }
-
-    subj_rows = "".join(f"<tr><td>{s['code']}</td><td>{s['name']}</td></tr>" for s in subjects)
-    stream_blocks = "".join(
-        f"<h4>Form {n}</h4><table border='1' cellpadding='4'><tr><th>Code</th><th>Name</th></tr>"
-        + "".join(f"<tr><td>{s['code']}</td><td>{s['name']}</td></tr>" for s in rows) + "</table>"
-        for n, rows in forms_streams.items()
-    )
-    # ---- System Control: feature toggles, lockouts, OTP, bulk renumbering ----
     feature_states = db.all_feature_states()
     system_locked = db.is_system_locked()
-    teacher_list = db.conn.execute("SELECT staff_no, first_name, last_name, account_locked FROM teachers ORDER BY staff_no").fetchall()
+    teacher_list = db.conn.execute(
+        "SELECT staff_no, first_name, last_name, account_locked FROM teachers ORDER BY staff_no").fetchall()
     db.close()
 
-    feature_rows = "".join(
-        f"<tr><td>{name}</td><td>{'Enabled' if enabled else 'Disabled'}</td>"
-        f"<td><form method='post' style='margin:0'>"
-        f"<input type='hidden' name='action' value='toggle_feature'>"
-        f"<input type='hidden' name='feature' value='{name}'>"
-        f"<input type='hidden' name='enabled' value='{'0' if enabled else '1'}'>"
-        f"<button type='submit'>{'Disable' if enabled else 'Enable'}</button></form></td></tr>"
-        for name, enabled in feature_states.items()
-    )
+    tab_defs = [("subjects", "Subjects"), ("streams", "Streams"), ("components", "Components"),
+                ("access", "Access &amp; OTP"), ("numbering", "Renumbering")]
+    tab = request.values.get("tab", "subjects")
+    if tab not in [k for k, _ in tab_defs]:
+        tab = "subjects"
 
-    account_rows = "".join(
-        f"<tr><td class='mono'>{t['staff_no']}</td><td>{t['first_name']} {t['last_name']}</td>"
-        f"<td>{'LOCKED' if t['account_locked'] else 'Active'}</td>"
-        f"<td><form method='post' style='margin:0;display:inline'>"
-        f"<input type='hidden' name='action' value='toggle_account_lock'>"
-        f"<input type='hidden' name='target_staff_no' value='{t['staff_no']}'>"
-        f"<input type='hidden' name='locked' value='{'0' if t['account_locked'] else '1'}'>"
-        f"<button type='submit'>{'Unlock' if t['account_locked'] else 'Lock'}</button></form> "
-        f"<form method='post' style='margin:0;display:inline'>"
-        f"<input type='hidden' name='action' value='generate_otp'>"
-        f"<input type='hidden' name='target_staff_no' value='{t['staff_no']}'>"
-        f"<button type='submit'>Generate OTP</button></form></td></tr>"
-        for t in teacher_list
-    )
+    def chip(code, name):
+        return "<span class='chip'><b class='mono'>" + esc(code) + "</b> " + esc(name) + "</span>"
 
-    system_control_section = f"""
-    <h3>Component visibility</h3>
-    <p style="font-size:12px;color:var(--ink-muted)">Disabling a component hides its page from every
-    non-executive account. You (as an executive) can always see and re-enable it.</p>
-    <table border="1" cellpadding="4"><tr><th>Component</th><th>Status</th><th></th></tr>{feature_rows}</table>
+    def form_btn(action, fields, label, extra_style=""):
+        hidden = "".join("<input type='hidden' name='" + k + "' value='" + esc(str(v)) + "'>" for k, v in fields.items())
+        return ("<form method='post'" + extra_style + "><input type='hidden' name='action' value='" + action + "'>"
+                + hidden + "<button type='submit'>" + label + "</button></form>")
 
-    <h3>System lockout</h3>
-    <p style="font-size:12px;color:var(--ink-muted)">Blocks every non-executive login (maintenance,
-    holidays, staff leave). Executives can still log in to lift it.</p>
-    <p>Current status: <b>{"LOCKED" if system_locked else "Open"}</b></p>
-    <form method="post">
-      <input type="hidden" name="action" value="toggle_system_lock">
-      <input type="hidden" name="locked" value="{'0' if system_locked else '1'}">
-      <button type="submit">{"Unlock system" if system_locked else "Lock system"}</button>
-    </form>
+    if tab == "subjects":
+        content = (
+            "<div class='chip-row'>" + "".join(chip(r["code"], r["name"]) for r in subjects) + "</div>"
+            "<div class='split'>"
+            "<form method='post'><input type='hidden' name='action' value='add_subject'>"
+            "Name: <input name='name'> <button type='submit'>Add subject</button></form>"
+            "<form method='post'><input type='hidden' name='action' value='remove_subject'>"
+            "Name or code: <input name='name_or_code'> <button type='submit'>Remove subject</button></form>"
+            "</div>")
+    elif tab == "streams":
+        rows = "".join(
+            "<tr><td><b>Form " + str(num) + "</b></td><td><div class='chip-row' style='margin:0'>"
+            + "".join(chip(r["code"], r["name"]) for r in rs) + "</div></td></tr>"
+            for num, rs in forms_streams.items())
+        content = (
+            "<div class='grid-wrap'><table><thead><tr><th>Form</th><th>Streams</th></tr></thead><tbody>"
+            + rows + "</tbody></table></div><br><div class='split'>"
+            "<form method='post'><input type='hidden' name='action' value='add_stream'>"
+            "Form: <input name='form_number' size='2' value='1'> Stream name: <input name='name'> "
+            "<button type='submit'>Add stream</button></form>"
+            "<form method='post'><input type='hidden' name='action' value='remove_stream'>"
+            "Form: <input name='form_number' size='2' value='1'> Stream: <input name='name_or_code'> "
+            "Move students to: <input name='reassign_to' size='8'> <button type='submit'>Remove stream</button></form>"
+            "</div>")
+    elif tab == "components":
+        cards = ""
+        for name, enabled in feature_states.items():
+            cards += (
+                "<div class='toggle-card'><b>" + name.replace("_", " ").title() + "</b>"
+                "<span class='state' style='color:" + ("green" if enabled else "var(--danger)") + "'>"
+                + ("Enabled" if enabled else "Disabled") + "</span>"
+                + form_btn("toggle_feature", {"feature": name, "enabled": "0" if enabled else "1"},
+                           "Disable" if enabled else "Enable") + "</div>")
+        content = ("<p class='hint'>Disabling a component hides it from every non-executive account. "
+                   "You can always see and re-enable it.</p><div class='toggle-grid'>" + cards + "</div>")
+    elif tab == "access":
+        acct = "".join(
+            "<tr><td class='mono'>" + esc(t["staff_no"]) + "</td><td>" + esc(t["first_name"]) + " " + esc(t["last_name"])
+            + "</td><td>" + ("<b style='color:var(--danger)'>LOCKED</b>" if t["account_locked"] else "Active") + "</td><td>"
+            + form_btn("toggle_account_lock", {"target_staff_no": t["staff_no"],
+                                               "locked": "0" if t["account_locked"] else "1"},
+                       "Unlock" if t["account_locked"] else "Lock")
+            + form_btn("generate_otp", {"target_staff_no": t["staff_no"]}, "Generate OTP")
+            + "</td></tr>"
+            for t in teacher_list)
+        content = (
+            "<div class='toggle-card' style='max-width:380px;margin-bottom:18px'><b>System lockout</b>"
+            "<span class='state' style='color:" + ("var(--danger)" if system_locked else "green") + "'>"
+            + ("LOCKED" if system_locked else "Open") + "</span>"
+            "<p class='hint' style='margin:0'>Blocks every non-executive login (maintenance, holidays, staff "
+            "leave). Executives can still log in to lift it.</p>"
+            + form_btn("toggle_system_lock", {"locked": "0" if system_locked else "1"},
+                       "Unlock system" if system_locked else "Lock system") + "</div>"
+            "<p class='hint'>Lock one person's login, or generate a 15-minute, single-use 6-digit code to read out "
+            "to them (they enter it on the reset page). No password is ever shown.</p>"
+            "<div class='grid-wrap'><table><thead><tr><th>Staff No</th><th>Name</th><th>Status</th><th></th></tr></thead>"
+            "<tbody>" + acct + "</tbody></table></div>")
+    else:  # numbering
+        content = (
+            "<p class='hint'>Renumbers EVERY existing record in one pass and cascades to everything that "
+            "references it (marks, attendance, fees, ...), so nothing goes stale.</p><div class='split'>"
+            "<form method='post'><b>Students</b><input type='hidden' name='action' value='bulk_renumber_students'>"
+            "Prefix: <input name='prefix' size='8' value='2027'> Padding: <input name='padding' size='3' value='3'> "
+            "Start: <input name='start' size='6' value='1'> Form (blank = all): <input name='form_number' size='2'> "
+            "<button type='submit'>Renumber students</button></form>"
+            "<form method='post'><b>Staff</b><input type='hidden' name='action' value='bulk_renumber_staff'>"
+            "Prefix: <input name='prefix' size='8' value='EMP'> Padding: <input name='padding' size='3' value='3'> "
+            "Start: <input name='start' size='6' value='1'> <button type='submit'>Renumber staff</button></form>"
+            "</div>")
 
-    <h3>Per-account lock &amp; recovery OTP</h3>
-    <p style="font-size:12px;color:var(--ink-muted)">Locking an account blocks that one person's login.
-    "Generate OTP" issues a fresh 15-minute, single-use code you can read out to them (or use yourself
-    at <code>/reset-password</code>) -- no password is ever stored or shown in plain text.</p>
-    <table border="1" cellpadding="4"><tr><th>Staff No</th><th>Name</th><th>Status</th><th></th></tr>{account_rows}</table>
-
-    <h3>Bulk renumber students (retroactive)</h3>
-    <p style="font-size:12px;color:var(--ink-muted)">Renumbers EVERY existing student's admission
-    number (optionally scoped to one form) in one pass -- cascades to every record that references
-    them (marks, attendance, fees, etc.), so nothing goes stale.</p>
-    <form method="post">
-      <input type="hidden" name="action" value="bulk_renumber_students">
-      Prefix: <input name="prefix" size="8" value="2027"> Padding: <input name="padding" size="3" value="3">
-      Start: <input name="start" size="6" value="1"> Form (optional, blank = all): <input name="form_number" size="2">
-      <button type="submit">Renumber students</button>
-    </form>
-
-    <h3>Bulk renumber staff (retroactive)</h3>
-    <form method="post">
-      <input type="hidden" name="action" value="bulk_renumber_staff">
-      Prefix: <input name="prefix" size="8" value="EMP"> Padding: <input name="padding" size="3" value="3">
-      Start: <input name="start" size="6" value="1">
-      <button type="submit">Renumber staff</button>
-    </form>
-    """
-
-    body = f"""
-    <h3>Subjects</h3>
-    <table border="1" cellpadding="4"><tr><th>Code</th><th>Name</th></tr>{subj_rows}</table>
-    <form method="post">
-      <input type="hidden" name="action" value="add_subject">
-      Name: <input name="name"> <button type="submit">Add subject</button>
-    </form>
-    <form method="post">
-      <input type="hidden" name="action" value="remove_subject">
-      Name or code: <input name="name_or_code"> <button type="submit">Remove subject</button>
-    </form>
-
-    <h3>Streams</h3>
-    {stream_blocks}
-    <form method="post">
-      <input type="hidden" name="action" value="add_stream">
-      Form: <input name="form_number" size="2" value="1"> Stream name: <input name="name">
-      <button type="submit">Add stream</button>
-    </form>
-    <form method="post">
-      <input type="hidden" name="action" value="remove_stream">
-      Form: <input name="form_number" size="2" value="1"> Stream name/code: <input name="name_or_code">
-      Reassign students to (if any exist): <input name="reassign_to">
-      <button type="submit">Remove stream</button>
-    </form>
-
-    {system_control_section}
-    """
-    return page("Academic Setup", body)
+    # keep the person on the same tab after any action
+    content = content.replace("<form method='post'", "<form method='post' action='?tab=" + tab + "'")
+    bar = "<div class='tabs'>" + "".join(
+        "<a href='?tab=" + k + "' class='" + ("active" if k == tab else "") + "'>" + v + "</a>"
+        for k, v in tab_defs) + "</div>"
+    return page("Academic Setup", bar + content)
 
 
 # ----------------------------------------------------------------------
@@ -3281,6 +3342,66 @@ def department_performance_pdf():
         db.close()
 
 
+# ----------------------------------------------------------------------
+# hosted deployment (Render, or anything setting SCHOOL_APP_PRODUCTION=1)
+# Runs under gunicorn, which imports this module, so the safety checks live here
+# rather than in the __main__ block below.
+# ----------------------------------------------------------------------
+IS_PRODUCTION = bool(os.environ.get("RENDER")) or os.environ.get("SCHOOL_APP_PRODUCTION") == "1"
+
+if IS_PRODUCTION:
+    from werkzeug.middleware.proxy_fix import ProxyFix
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)  # trust the host's HTTPS proxy
+    app.config["SESSION_COOKIE_SECURE"] = True
+
+    # First start on an empty disk: create the admin from SCHOOL_ADMIN_PASSWORD (never 'admin').
+    _pw = os.environ.get("SCHOOL_ADMIN_PASSWORD")
+    _db = get_db()
+    try:
+        if _pw and not _db.conn.execute("SELECT 1 FROM teachers WHERE staff_no='admin'").fetchone():
+            _db.add_teacher("System", "Administrator", staff_no="admin", password=_pw)
+            for _role in ("principal", "deputy_principal_academics", "deputy_principal_admin", "dean_of_studies"):
+                _db.grant_role("admin", _role)
+        _problems = []
+        if app.secret_key == "dev-secret-change-me":
+            _problems.append("SCHOOL_APP_SECRET is not set")
+        if _db.verify_password("admin", "admin"):
+            _problems.append("the admin account uses the default password 'admin' "
+                             "(set SCHOOL_ADMIN_PASSWORD before the first start)")
+    finally:
+        _db.close()
+    if _problems:
+        raise RuntimeError("Refusing to start: " + "; ".join(_problems))
+
+
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    import sys
+    host = os.environ.get("SCHOOL_APP_HOST", "127.0.0.1")
+    port = int(os.environ.get("SCHOOL_APP_PORT", "5000"))
+    exposed = host not in ("127.0.0.1", "localhost", "::1")
+    debug = os.environ.get("SCHOOL_APP_DEBUG", "1") == "1"
+
+    if exposed:
+        # Reachable from other machines: refuse to start in an unsafe state.
+        problems = []
+        if app.secret_key == "dev-secret-change-me":
+            problems.append("SCHOOL_APP_SECRET is not set (sessions could be forged). "
+                            "Set it to a long random string.")
+        _db = get_db()
+        try:
+            if _db.verify_password("admin", "admin"):
+                problems.append("The admin account still uses the default password 'admin'. "
+                                "Change it first (see create_admin.py / set_password).")
+        finally:
+            _db.close()
+        if problems:
+            print("\nRefusing to start on " + host + " -- the system would be reachable by others:")
+            for item in problems:
+                print("  - " + item)
+            sys.exit(1)
+        if debug:
+            print("Debug mode switched OFF automatically: it lets anyone who can reach the "
+                  "server run code on this machine.")
+            debug = False
+
+    app.run(host=host, port=port, debug=debug)
