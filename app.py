@@ -16,6 +16,7 @@ Then open http://localhost:5000
 """
 
 import os
+from datetime import timedelta
 from html import escape as esc
 import tempfile
 from flask import Flask, request, session, redirect, url_for, render_template_string, send_file, flash
@@ -26,6 +27,7 @@ from auth import login as db_login, TeacherSession
 app = Flask(__name__)
 app.secret_key = os.environ.get("SCHOOL_APP_SECRET", "dev-secret-change-me")
 app.config.update(
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
     SESSION_COOKIE_HTTPONLY=True,          # page scripts can't read the session cookie
     SESSION_COOKIE_SAMESITE="Lax",         # not sent on cross-site POSTs
     SESSION_COOKIE_SECURE=os.environ.get("SCHOOL_APP_HTTPS") == "1",  # set to 1 once behind HTTPS
@@ -162,23 +164,47 @@ STYLE = """
   td { padding: 9px 12px; border-top: 1px solid var(--border); font-size: 13px; }
   tr:nth-child(even) td { background: #FAFBFD; }
 
-  /* ---- auth card ---- */
-  .auth-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: var(--navy); }
-  .auth-card {
-    background: var(--card); border-radius: 14px; padding: 36px 34px; width: 340px;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.25);
-  }
-  .auth-card .brand-mark {
-    width: 40px; height: 40px; border-radius: 9px; background: var(--gold);
-    display: flex; align-items: center; justify-content: center; font-family: 'Space Grotesk', sans-serif;
-    font-weight: 700; color: var(--navy); margin-bottom: 16px; font-size: 15px;
-  }
-  .auth-card h2 { margin-bottom: 4px; }
-  .auth-card p.sub { color: var(--ink-muted); font-size: 13px; margin: 0 0 20px; }
-  .auth-card form { flex-direction: column; align-items: stretch; border: none; padding: 0; }
-  .auth-card form input { width: 100%; }
-  .auth-card form button { width: 100%; padding: 10px; }
-  .auth-card .links { margin-top: 16px; font-size: 12px; display: flex; justify-content: space-between; }
+  /* ---- auth screens: clean light layout ---- */
+  .auth-wrap { min-height: 100vh; display: flex; align-items: flex-start; justify-content: center; background: #fff; padding-top: 6vh; }
+  .auth-card { background: transparent; padding: 0 18px 40px; width: 500px; max-width: 94vw; box-shadow: none; font-family: 'Inter', sans-serif; }
+  .auth-card .brand-row { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 46px;
+    font-weight: 700; font-size: 30px; color: #111827; letter-spacing: -0.01em; }
+  .auth-card .brand-mark { width: 50px; height: 50px; border-radius: 12px; background: var(--gold); display: flex;
+    align-items: center; justify-content: center; font-weight: 800; color: var(--navy); font-size: 18px; margin: 0; }
+  .auth-card h2 { text-align: center; font-size: 42px; font-weight: 800; color: #150a52; margin: 0 0 6px; letter-spacing: -0.02em; }
+  .auth-card p.sub { text-align: center; color: #4b5563; font-size: 19px; margin: 0 0 40px; }
+  .auth-card form { flex-direction: column; align-items: stretch; border: none; padding: 0; background: transparent; }
+  .auth-card label.fl { display: block; font-weight: 700; font-size: 17px; margin: 22px 0 9px; color: #374151; }
+  .auth-card .req { color: #e11d48; }
+  .auth-card form input[type=text], .auth-card form input[type=password], .auth-card form input[type=email],
+  .auth-card form input:not([type]) { width: 100%; height: 54px; padding: 0 16px; border-radius: 10px;
+    border: 1px solid #d1d5db; font-size: 17px; font-weight: 500; color: #111827; background: #fff;
+    box-shadow: 0 1px 2px rgba(16,24,40,0.05); }
+  .auth-card form input::placeholder { color: #6b7280; font-weight: 600; }
+  .auth-card form input:focus { outline: none; border-color: #15b04a; box-shadow: 0 0 0 3px rgba(21,176,74,0.18); }
+  .auth-card .pw-wrap { position: relative; }
+  .auth-card .pw-wrap input { padding-right: 170px !important; }
+  .auth-card .pw-toggle { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); width: auto !important;
+    background: none !important; color: #6b7280 !important; padding: 4px 6px !important; font-size: 15px; font-weight: 600;
+    border: none; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+  .auth-card .row-opts { display: flex; justify-content: space-between; align-items: center; margin-top: 24px; font-size: 17px; }
+  .auth-card .row-opts label { display: flex; align-items: center; gap: 14px; font-weight: 700; color: #374151; cursor: pointer; }
+  .auth-card .row-opts input[type=checkbox] { width: 22px; height: 22px; accent-color: #14b8a6; margin: 0; }
+  .auth-card a { color: #0a58ca; font-weight: 700; text-decoration: none; }
+  .auth-card a:hover { text-decoration: underline; }
+  .auth-card form button.btn-green { width: 100%; height: 56px; background: #15b04a !important; border-radius: 999px !important;
+    font-size: 19px !important; font-weight: 700; margin-top: 28px; padding: 0 !important; }
+  .auth-card form button.btn-green:hover { background: #12993f !important; }
+  .auth-card .divider { display: flex; align-items: center; gap: 18px; margin: 34px 0 22px; color: #6b7280;
+    font-weight: 600; font-size: 17px; }
+  .auth-card .divider::before, .auth-card .divider::after { content: ""; flex: 1; height: 1px; background: #e5e7eb; }
+  .auth-card .alt-pill { display: flex; align-items: center; justify-content: center; gap: 12px; width: fit-content;
+    margin: 0 auto; background: #e8f7ee; color: #1f2937 !important; border-radius: 999px; padding: 14px 26px; font-size: 17px; }
+  .auth-card .alt-pill:hover { text-decoration: none; background: #d9f1e2; }
+  .auth-card .alt-pill svg { flex: none; }
+  .auth-card .foot { text-align: center; margin-top: 30px; font-size: 16px; color: #4b5563; }
+  .auth-card .foot a { margin-left: 4px; }
+  .auth-card .links { margin-top: 22px; font-size: 15px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
 
   /* ---- app-launcher layout: no long sidebar, a slim top bar + tile grid ---- */
   .app-shell { display: block; }
@@ -292,10 +318,9 @@ def page(title, body, nav=True):
         # auth screens (login, forgot password, change password) get the centered card treatment
         template = f"""<!doctype html><html><head><title>EduLink &mdash; {title}</title>{STYLE}</head>
         <body><div class="auth-wrap"><div class="auth-card">
-        <div class="brand-mark">EL</div>
-        <p style="font-family:'Space Grotesk',sans-serif;font-weight:700;color:var(--navy);
-           font-size:13px;letter-spacing:0.02em;margin:0 0 2px">EDULINK</p>
+        <div class="brand-row"><div class="brand-mark">EL</div>EduLink</div>
         <h2>{title}</h2>
+        <p class="sub">All school services</p>
         {{% with messages = get_flashed_messages() %}}
           {{% if messages %}}<p class="flash">{{{{ messages[0] }}}}</p>{{% endif %}}
         {{% endwith %}}
@@ -375,6 +400,7 @@ def login_view():
                 flash(LOCK_MSG)
                 return redirect(url_for("login_view"))
             session["staff_no"] = sess.staff_no
+            session.permanent = bool(request.form.get("remember"))
             if sess.must_reset_password:
                 session["must_reset_password"] = True
                 return redirect(url_for("change_password_view"))
@@ -385,13 +411,24 @@ def login_view():
             db.close()
     body = """
     <form method="post">
-      Staff No or Email: <input name="identifier" value="{{ request.form.get('identifier','') }}"><br><br>
-      Password: <input name="password" type="password"><br><br>
-      <button type="submit">Login</button>
+      <label class="fl">Staff number or email address <span class="req">*</span></label>
+      <input name="identifier" placeholder="Enter your staff number or email" autocomplete="username" required
+             value="{{ request.form.get('identifier','') }}">
+      <label class="fl">Password <span class="req">*</span></label>
+      <div class="pw-wrap">
+        <input id="pw" name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+        <button type="button" class="pw-toggle" onclick="var i=document.getElementById('pw');var s=i.type==='password';i.type=s?'text':'password';this.firstChild.textContent=s?'Hide Password':'Show Password'"><span>Show Password</span><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      </div>
+      <div class="row-opts">
+        <label><input type="checkbox" name="remember" value="1"> Remember for 30 days</label>
+        <a href="{{ url_for('forgot_password_view') }}">Forgot Password</a>
+      </div>
+      <button type="submit" class="btn-green">Sign In</button>
     </form>
-    <p><a href="{{ url_for('forgot_password_view') }}">Forgot password?</a></p>
-    <p><a href="{{ url_for('reset_password_view') }}">Have a one-time code (OTP)? Enter it here</a></p>
-    <p><a href="{{ url_for('parent_login_view') }}">Parent login</a></p>
+    <div class="divider">Or continue with</div>
+    <a class="alt-pill" href="{{ url_for('parent_login_view') }}"><svg width="34" height="34" viewBox="0 0 34 34"><circle cx="17" cy="17" r="17" fill="#15b04a"/><circle cx="17" cy="13" r="4.6" fill="#fff"/><path d="M8.5 25.5c1.2-4.3 4.8-6.3 8.5-6.3s7.3 2 8.5 6.3" fill="#fff"/></svg><b>Sign in to the Parent portal</b></a>
+    <div class="links"><a href="{{ url_for('reset_password_view') }}">Have a one-time code (OTP)? Enter it here</a></div>
+    <div class="foot">Need an account? Ask your school administrator.</div>
     """
     return page("Login", body, nav=False)
 
@@ -545,6 +582,7 @@ def parent_login_view():
         try:
             parent_id = db.parent_login(request.form["email"].strip(), request.form["password"])
             session["parent_id"] = parent_id
+            session.permanent = bool(request.form.get("remember"))
             return redirect(url_for("parent_dashboard"))
         except AuthError as e:
             flash(str(e))
@@ -552,12 +590,21 @@ def parent_login_view():
             db.close()
     body = """
     <form method="post">
-      Email: <input name="email"><br><br>
-      Password: <input name="password" type="password"><br><br>
-      <button type="submit">Login</button>
+      <label class="fl">Email address <span class="req">*</span></label>
+      <input name="email" type="email" placeholder="Enter your email address" autocomplete="username" required>
+      <label class="fl">Password <span class="req">*</span></label>
+      <div class="pw-wrap">
+        <input id="pw" name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+        <button type="button" class="pw-toggle" onclick="var i=document.getElementById('pw');var s=i.type==='password';i.type=s?'text':'password';this.firstChild.textContent=s?'Hide Password':'Show Password'"><span>Show Password</span><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#4b5563" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+      </div>
+      <div class="row-opts">
+        <label><input type="checkbox" name="remember" value="1"> Remember for 30 days</label>
+        <a href="{{ url_for('forgot_password_view_parent') }}">Forgot Password</a>
+      </div>
+      <button type="submit" class="btn-green">Sign In</button>
     </form>
-    <p><a href="{{ url_for('forgot_password_view_parent') }}">Forgot password?</a></p>
-    <p><a href="{{ url_for('login_view') }}">Staff login</a></p>
+    <div class="divider">Or continue with</div>
+    <a class="alt-pill" href="{{ url_for('login_view') }}"><svg width="34" height="34" viewBox="0 0 34 34"><circle cx="17" cy="17" r="17" fill="#15b04a"/><circle cx="17" cy="13" r="4.6" fill="#fff"/><path d="M8.5 25.5c1.2-4.3 4.8-6.3 8.5-6.3s7.3 2 8.5 6.3" fill="#fff"/></svg><b>Sign in as school staff</b></a>
     """
     return page("Parent Login", body, nav=False)
 
