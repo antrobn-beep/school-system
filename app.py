@@ -3365,6 +3365,9 @@ if IS_PRODUCTION:
         _problems = []
         if app.secret_key == "dev-secret-change-me":
             _problems.append("SCHOOL_APP_SECRET is not set")
+        if not _db.conn.execute("SELECT 1 FROM staff_roles WHERE role IN "
+                                "('principal','deputy_principal_academics','deputy_principal_admin','dean_of_studies')").fetchone():
+            _problems.append("there is no executive account yet (set SCHOOL_ADMIN_PASSWORD for the first start)")
         if _db.verify_password("admin", "admin"):
             _problems.append("the admin account uses the default password 'admin' "
                              "(set SCHOOL_ADMIN_PASSWORD before the first start)")
@@ -3404,6 +3407,4 @@ if __name__ == "__main__":
                   "server run code on this machine.")
             debug = False
 
-    if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host=host, port=port, debug=debug)
