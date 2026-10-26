@@ -517,9 +517,6 @@ def forgot_password_view():
             db.close()
         flash("Ask an administrator for a one-time code.")
     body = """
-    <p style="font-size:13px;color:var(--ink-muted)">This system runs offline and does not send
-    email or SMS. Ask an administrator to generate a one-time code (OTP) for you, then use the
-    link below to enter it.</p>
     <form method="post">
       Username: <input name="identifier"><br><br>
       <button type="submit">Request a code</button>
