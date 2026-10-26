@@ -27,7 +27,7 @@ from school_reports import generate_school_merit_list, generate_department_perfo
 def login(db: SchoolDB, identifier: str, password: str) -> "TeacherSession":
     """identifier can be a staff_no (e.g. 'TSC0001') or the teacher's email."""
     if not db.verify_password(identifier, password):
-        raise AuthError("Invalid staff number/email or password.")
+        raise AuthError("Invalid username or password.")
     staff_no = db._resolve_login_identifier(identifier)
     session = TeacherSession(db, staff_no)
     session.must_reset_password = db.must_reset_password(staff_no)

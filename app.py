@@ -16,7 +16,7 @@ Then open http://localhost:5000
 """
 
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 from html import escape as esc
 import tempfile
 from flask import Flask, request, session, redirect, url_for, render_template_string, send_file, flash
@@ -42,6 +42,12 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
 
 
+
+def _err(e):
+    """Keep messages short: a refusal just says so; other errors say what is wrong."""
+    return "Not allowed." if isinstance(e, PermissionDenied) else str(e)
+
+
 def get_db():
     return SchoolDB(DB_PATH)
 
@@ -54,18 +60,20 @@ STYLE = """
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap');
 
   :root {
-    --ink: #1B2333;
-    --ink-muted: #6B7686;
-    --navy: #1F2A44;
-    --navy-2: #2B3A55;
-    --gold: #C9A227;
-    --gold-soft: #F5EBC7;
-    --paper: #F4F6F9;
+    --ink: #12261C;
+    --ink-muted: #5B7266;
+    --navy: #0E4A33;          /* deep emerald (kept name: used everywhere) */
+    --navy-2: #14724B;        /* primary green */
+    --accent: #1FA06A;        /* bright green accent */
+    --gold: #1FA06A;
+    --gold-soft: #DDF3E6;
+    --paper: #F1F7F3;
     --card: #FFFFFF;
-    --border: #E2E6ED;
+    --border: #D5E6DC;
     --danger: #B3261E;
     --danger-soft: #FBEAEA;
-    --radius: 10px;
+    --radius: 12px;
+    --shadow: 0 1px 2px rgba(14,74,51,.06), 0 6px 18px rgba(14,74,51,.06);
   }
   @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 
@@ -98,13 +106,13 @@ STYLE = """
     border-left: 3px solid transparent; transition: all .15s ease;
   }
   .navtab:hover { background: rgba(255,255,255,0.06); color: #fff; }
-  .navtab.active { background: rgba(201,162,39,0.14); border-left-color: var(--gold); color: #fff; }
+  .navtab.active { background: rgba(201,162,39,0.14); border-left-color: var(--accent); color: #fff; }
   .navtab .tag {
     font-family: 'IBM Plex Mono', monospace; font-size: 9px; font-weight: 500;
     width: 22px; height: 22px; border-radius: 5px; display: flex; align-items: center;
     justify-content: center; background: rgba(255,255,255,0.08); flex-shrink: 0;
   }
-  .navtab.active .tag { background: var(--gold); color: var(--navy); }
+  .navtab.active .tag { background: var(--accent); color: var(--navy); }
   .sidebar .logout-tab { margin-top: 14px; border-top: 1px solid rgba(255,255,255,0.12); padding-top: 14px; }
 
   .main { flex: 1; min-width: 0; }
@@ -118,7 +126,7 @@ STYLE = """
     font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500;
     padding: 4px 9px; border-radius: 20px; background: var(--navy-2); color: #fff;
   }
-  .badge.oversight { background: var(--gold); color: var(--navy); }
+  .badge.oversight { background: var(--accent); color: var(--navy); }
   .content { padding: 24px 32px 60px; max-width: 1080px; }
 
   /* ---- flash ---- */
@@ -140,7 +148,7 @@ STYLE = """
     border: 1px solid var(--border); border-radius: 7px; background: #fff; color: var(--ink);
   }
   form input:focus, form select:focus, form textarea:focus {
-    outline: 2px solid var(--gold); outline-offset: 1px; border-color: var(--gold);
+    outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent);
   }
   form button, button {
     font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 600;
@@ -169,9 +177,9 @@ STYLE = """
   .auth-card { background: transparent; padding: 0 16px 28px; width: 380px; max-width: 94vw; box-shadow: none; font-family: 'Inter', sans-serif; }
   .auth-card .brand-row { display: flex; align-items: center; justify-content: center; gap: 9px; margin-bottom: 22px;
     font-weight: 700; font-size: 21px; color: #111827; letter-spacing: -0.01em; }
-  .auth-card .brand-mark { width: 34px; height: 34px; border-radius: 9px; background: var(--gold); display: flex;
-    align-items: center; justify-content: center; font-weight: 800; color: var(--navy); font-size: 13px; margin: 0; }
-  .auth-card h2 { text-align: center; font-size: 26px; font-weight: 800; color: #150a52; margin: 0 0 3px; letter-spacing: -0.02em; }
+  .auth-card .brand-mark { width: 34px; height: 34px; border-radius: 9px; background: linear-gradient(135deg,#0E4A33,#1FA06A); display: flex;
+    align-items: center; justify-content: center; font-weight: 800; color: #fff; font-size: 13px; margin: 0; }
+  .auth-card h2 { text-align: center; font-size: 26px; font-weight: 800; color: #0E4A33; margin: 0 0 3px; letter-spacing: -0.02em; }
   .auth-card p.sub { text-align: center; color: #4b5563; font-size: 14px; margin: 0 0 16px; }
   .auth-card form { flex-direction: column; align-items: stretch; border: none; padding: 0; background: transparent; }
   .auth-card label.fl { display: block; font-weight: 700; font-size: 13px; margin: 14px 0 6px; color: #374151; }
@@ -181,7 +189,7 @@ STYLE = """
     border: 1px solid #d1d5db; font-size: 14px; font-weight: 500; color: #111827; background: #fff;
     box-shadow: 0 1px 2px rgba(16,24,40,0.05); }
   .auth-card form input::placeholder { color: #6b7280; font-weight: 600; }
-  .auth-card form input:focus { outline: none; border-color: #15b04a; box-shadow: 0 0 0 3px rgba(21,176,74,0.18); }
+  .auth-card form input:focus { outline: none; border-color: #1FA06A; box-shadow: 0 0 0 3px rgba(31,160,106,0.2); }
   .auth-card .pw-wrap { position: relative; }
   .auth-card .pw-wrap input { padding-right: 140px !important; }
   .auth-card .pw-toggle { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); width: auto !important;
@@ -190,18 +198,18 @@ STYLE = """
   .auth-card .pw-toggle svg { width: 20px; height: 20px; }
   .auth-card .row-opts { display: flex; justify-content: space-between; align-items: center; margin-top: 16px; font-size: 13px; }
   .auth-card .row-opts label { display: flex; align-items: center; gap: 9px; font-weight: 700; color: #374151; cursor: pointer; }
-  .auth-card .row-opts input[type=checkbox] { width: 17px; height: 17px; accent-color: #14b8a6; margin: 0; }
-  .auth-card a { color: #0a58ca; font-weight: 700; text-decoration: none; }
+  .auth-card .row-opts input[type=checkbox] { width: 17px; height: 17px; accent-color: #14724B; margin: 0; }
+  .auth-card a { color: #0F7A4F; font-weight: 700; text-decoration: none; }
   .auth-card a:hover { text-decoration: underline; }
-  .auth-card form button.btn-green { width: 100%; height: 44px; background: #15b04a !important; border-radius: 999px !important;
+  .auth-card form button.btn-green { width: 100%; height: 44px; background: linear-gradient(135deg,#14724B,#1FA06A) !important; border-radius: 999px !important;
     font-size: 15px !important; font-weight: 700; margin-top: 18px; padding: 0 !important; }
-  .auth-card form button.btn-green:hover { background: #12993f !important; }
+  .auth-card form button.btn-green:hover { background: linear-gradient(135deg,#0E4A33,#14724B) !important; }
   .auth-card .divider { display: flex; align-items: center; gap: 12px; margin: 20px 0 14px; color: #6b7280;
     font-weight: 600; font-size: 13px; }
   .auth-card .divider::before, .auth-card .divider::after { content: ""; flex: 1; height: 1px; background: #e5e7eb; }
   .auth-card .alt-pill { display: flex; align-items: center; justify-content: center; gap: 9px; width: fit-content;
-    margin: 0 auto; background: #e8f7ee; color: #1f2937 !important; border-radius: 999px; padding: 9px 20px; font-size: 13px; }
-  .auth-card .alt-pill:hover { text-decoration: none; background: #d9f1e2; }
+    margin: 0 auto; background: #E3F5EA; color: #12261C !important; border-radius: 999px; padding: 9px 20px; font-size: 13px; }
+  .auth-card .alt-pill:hover { text-decoration: none; background: #D2EFDD; }
   .auth-card .alt-pill svg { flex: none; width: 24px; height: 24px; }
   .auth-card .foot { text-align: center; margin-top: 16px; font-size: 12px; color: #4b5563; }
   .auth-card .foot a { margin-left: 4px; }
@@ -215,21 +223,21 @@ STYLE = """
   .topbar.launcher .left { display: flex; align-items: center; gap: 14px; }
   .brand-chip { display: flex; align-items: center; gap: 8px; text-decoration: none; color: var(--navy);
     font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 15px; }
-  .brand-chip .mark { width: 30px; height: 30px; border-radius: 8px; background: var(--gold); color: var(--navy);
+  .brand-chip .mark { width: 30px; height: 30px; border-radius: 8px; background: var(--accent); color: var(--navy);
     display: flex; align-items: center; justify-content: center; font-size: 12px; }
   .apps-btn { display: inline-flex; align-items: center; gap: 6px; background: var(--paper); color: var(--navy);
     border: 1px solid var(--border); border-radius: 8px; padding: 6px 12px; font-size: 13px; font-weight: 600;
     text-decoration: none; }
-  .apps-btn:hover { border-color: var(--gold); }
+  .apps-btn:hover { border-color: var(--accent); }
   .topbar.launcher h2 { font-size: 17px; }
   .content { margin: 0 auto; max-width: 1180px; }
   .app-group { font-family: 'Space Grotesk', sans-serif; font-size: 12px; font-weight: 600; letter-spacing: .06em;
     text-transform: uppercase; color: var(--ink-muted); margin: 26px 0 10px; }
-  .app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
-  .app-tile { position: relative; display: flex; flex-direction: column; gap: 6px; background: var(--card);
+  .app-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 14px; }
+  .app-tile { position: relative; display: flex; flex-direction: column; gap: 4px; background: var(--card);
     border: 1px solid var(--border); border-radius: 16px; padding: 18px; text-decoration: none; color: var(--ink);
     transition: transform .15s ease, box-shadow .15s ease, border-color .15s ease; }
-  .app-tile:hover { transform: translateY(-3px); box-shadow: 0 10px 24px rgba(31,42,68,.12); border-color: var(--gold); }
+  .app-tile:hover { transform: translateY(-3px); box-shadow: 0 10px 24px rgba(31,42,68,.12); border-color: var(--accent); }
   .app-icon { width: 52px; height: 52px; border-radius: 14px; display: flex; align-items: center;
     justify-content: center; font-size: 26px; margin-bottom: 6px; }
   .app-name { font-family: 'Space Grotesk', sans-serif; font-weight: 700; font-size: 15px; color: var(--navy); }
@@ -238,7 +246,7 @@ STYLE = """
   .tabs a { padding:9px 16px; text-decoration:none; color:var(--ink-muted); font-weight:600; font-size:13px;
     border-bottom:2px solid transparent; margin-bottom:-1px; }
   .tabs a:hover { color:var(--navy); }
-  .tabs a.active { color:var(--navy); border-bottom-color:var(--gold); }
+  .tabs a.active { color:var(--navy); border-bottom-color:var(--accent); }
   .hint { font-size:12px; color:var(--ink-muted); margin:0 0 12px; }
   .chip-row { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:16px; }
   .chip { display:inline-flex; gap:6px; align-items:center; background:var(--card); border:1px solid var(--border);
@@ -257,15 +265,56 @@ STYLE = """
   .grid-wrap td { padding:3px 6px; }
   .grid-wrap td.wrap { white-space:normal; min-width:110px; max-width:230px; font-size:12px; }
   .grid-wrap form { display:inline-flex; padding:0; border:none; background:transparent; margin:0 4px 0 0; }
-  .grid-form { display:block !important; padding:0 !important; border:none !important;
+  .grid-form { box-shadow: none !important; display:block !important; padding:0 !important; border:none !important;
     background:transparent !important; margin:0 0 14px !important; }
   .grid-wrap input.cell, .grid-wrap select.cell { width:100%; min-width:120px; border:1px solid transparent;
     background:transparent; padding:5px 7px; border-radius:6px; font:inherit; }
   .grid-wrap input.cell:hover, .grid-wrap select.cell:hover { border-color:var(--border); background:#fff; }
-  .grid-wrap input.cell:focus, .grid-wrap select.cell:focus { border-color:var(--gold); background:#fff; outline:none; }
+  .grid-wrap input.cell:focus, .grid-wrap select.cell:focus { border-color:var(--accent); background:#fff; outline:none; }
   .grid-wrap input.narrow { min-width:0; width:46px; text-align:center; }
   .grid-actions { margin-top:10px; }
   .btn-danger { background:var(--danger) !important; padding:5px 10px !important; font-size:12px !important; }
+
+  /* ---- green theme polish ---- */
+  body { background: linear-gradient(180deg, #F1F7F3 0%, #E9F3ED 100%); background-attachment: fixed; }
+  ::selection { background: #BFE8D1; }
+  .topbar.launcher { background: linear-gradient(120deg, #0B3D2A 0%, #14724B 55%, #1FA06A 100%); border-bottom: none;
+    box-shadow: 0 4px 14px rgba(14,74,51,.25); }
+  .topbar.launcher h2 { color: #fff; }
+  .topbar.launcher .brand-chip { color: #fff; }
+  .topbar.launcher .brand-chip .mark { background: #fff; color: #0E4A33; }
+  .topbar.launcher .apps-btn { background: rgba(255,255,255,.14); color: #fff; border: 1px solid rgba(255,255,255,.3); }
+  .topbar.launcher .apps-btn:hover { background: rgba(255,255,255,.26); border-color: #fff; }
+  .topbar.launcher .who { color: #D5EFE0; }
+  .topbar.launcher .badge { background: rgba(255,255,255,.18); color: #fff; }
+  .topbar.launcher .badge.oversight { background: #F6D365; color: #3B2A00; }
+  form { box-shadow: var(--shadow); }
+  form button, button { background: linear-gradient(135deg, #14724B, #1FA06A); box-shadow: 0 1px 2px rgba(14,74,51,.25); }
+  form button:hover, button:hover { background: linear-gradient(135deg, #0E4A33, #14724B); }
+  form button:disabled, button:disabled { background: #B7C9BE; box-shadow: none; cursor: not-allowed; }
+  th { background: #14724B; }
+  tr:nth-child(even) td { background: #F6FBF8; }
+  tbody tr:hover td { background: #EAF6EF; }
+  table { box-shadow: var(--shadow); border-color: var(--border); }
+  a { color: #0F7A4F; }
+  h3 { color: var(--navy); }
+  .app-tile { box-shadow: var(--shadow); }
+  .app-tile:hover { box-shadow: 0 12px 28px rgba(14,74,51,.18); border-color: var(--accent); }
+  .app-group { color: #4F7A63; }
+  .tabs a.active { color: var(--navy); }
+  .hero { background: linear-gradient(120deg, #0B3D2A 0%, #14724B 60%, #2BB673 100%); color: #fff; border-radius: 18px;
+    padding: 26px 30px; margin-bottom: 8px; box-shadow: 0 10px 28px rgba(14,74,51,.28); display: flex;
+    justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .hero h1 { color: #fff; font-size: 26px; margin: 0 0 4px; letter-spacing: -0.02em; }
+  .hero p { margin: 0; color: #CFEBDB; font-size: 14px; }
+  .hero .pills { display: flex; gap: 8px; flex-wrap: wrap; }
+  .hero .pill { background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.3); color: #fff;
+    border-radius: 999px; padding: 5px 13px; font-size: 12px; font-weight: 600; }
+  .locked-note { display: inline-block; background: #E5ECE8; color: #5B7266; border-radius: 999px; padding: 3px 12px;
+    font-size: 12px; font-weight: 600; margin-left: 8px; vertical-align: middle; }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); }
+  .pick { display: flex; gap: 10px; padding: 12px 14px; }
+  .pick select { min-width: 230px; padding: 9px 12px; font-size: 14px; }
   .app-badge { position: absolute; top: 12px; right: 12px; background: var(--danger); color: #fff; font-size: 11px;
     font-weight: 700; border-radius: 20px; padding: 2px 8px; }
 </style>
@@ -407,13 +456,13 @@ def login_view():
                 return redirect(url_for("change_password_view"))
             return redirect(url_for("dashboard"))
         except AuthError as e:
-            flash(str(e))
+            flash(_err(e))
         finally:
             db.close()
     body = """
     <form method="post">
-      <label class="fl">Staff number or email address <span class="req">*</span></label>
-      <input name="identifier" placeholder="Enter your staff number or email" autocomplete="username" required
+      <label class="fl">Username <span class="req">*</span></label>
+      <input name="identifier" placeholder="Username" autocomplete="username" required
              value="{{ request.form.get('identifier','') }}">
       <label class="fl">Password <span class="req">*</span></label>
       <div class="pw-wrap">
@@ -427,7 +476,7 @@ def login_view():
       <button type="submit" class="btn-green">Sign In</button>
     </form>
     <div class="divider">Or continue with</div>
-    <a class="alt-pill" href="{{ url_for('parent_login_view') }}"><svg width="34" height="34" viewBox="0 0 34 34"><circle cx="17" cy="17" r="17" fill="#15b04a"/><circle cx="17" cy="13" r="4.6" fill="#fff"/><path d="M8.5 25.5c1.2-4.3 4.8-6.3 8.5-6.3s7.3 2 8.5 6.3" fill="#fff"/></svg><b>Sign in to the Parent portal</b></a>
+    <a class="alt-pill" href="{{ url_for('parent_login_view') }}"><svg width="34" height="34" viewBox="0 0 34 34"><circle cx="17" cy="17" r="17" fill="#14724B"/><circle cx="17" cy="13" r="4.6" fill="#fff"/><path d="M8.5 25.5c1.2-4.3 4.8-6.3 8.5-6.3s7.3 2 8.5 6.3" fill="#fff"/></svg><b>Sign in to the Parent portal</b></a>
     <div class="links"><a href="{{ url_for('reset_password_view') }}">Have a one-time code (OTP)? Enter it here</a></div>
     <div class="foot">Need an account? Ask your school administrator.</div>
     """
@@ -466,14 +515,13 @@ def forgot_password_view():
             pass
         finally:
             db.close()
-        flash("This system sends no email or SMS. Ask an administrator for a one-time code, "
-              "then enter it on the reset page.")
+        flash("Ask an administrator for a one-time code.")
     body = """
     <p style="font-size:13px;color:var(--ink-muted)">This system runs offline and does not send
     email or SMS. Ask an administrator to generate a one-time code (OTP) for you, then use the
     link below to enter it.</p>
     <form method="post">
-      Staff No or Email: <input name="identifier"><br><br>
+      Username: <input name="identifier"><br><br>
       <button type="submit">Request a code</button>
     </form>
     <p><a href="{{ url_for('reset_password_view') }}">I already have a code &rarr; reset my password</a></p>
@@ -488,10 +536,10 @@ def reset_password_view():
         db = get_db()
         try:
             db.reset_password_with_token(request.form["token"], request.form["new_password"])
-            flash("Password reset. You can log in with your new password now.")
+            flash("Password updated.")
             return redirect(url_for("login_view"))
         except AuthError as e:
-            flash(str(e))
+            flash(_err(e))
         finally:
             db.close()
     body = """
@@ -500,7 +548,6 @@ def reset_password_view():
       New password: <input name="new_password" type="password"><br><br>
       <button type="submit">Reset password</button>
     </form>
-    <p style="font-size:12px;color:var(--ink-muted)">The code is 6 digits, works once, and expires after 15 minutes.</p>
     <p><a href="{{ url_for('login_view') }}">Back to login</a></p>
     """
     return page("Reset Password", body, nav=False)
@@ -552,7 +599,7 @@ def _enforce_system_controls():
 
         feature_name = _ENDPOINT_TO_FEATURE_NAME.get(endpoint)
         if feature_name and not oversight and not db.is_feature_enabled(feature_name):
-            flash(f"This component has been temporarily disabled by an administrator.")
+            flash("Unavailable.")
             return redirect(url_for("dashboard"))
     finally:
         db.close()
@@ -586,13 +633,13 @@ def parent_login_view():
             session.permanent = bool(request.form.get("remember"))
             return redirect(url_for("parent_dashboard"))
         except AuthError as e:
-            flash(str(e))
+            flash(_err(e))
         finally:
             db.close()
     body = """
     <form method="post">
-      <label class="fl">Email address <span class="req">*</span></label>
-      <input name="email" type="email" placeholder="Enter your email address" autocomplete="username" required>
+      <label class="fl">Username <span class="req">*</span></label>
+      <input name="email" type="text" placeholder="Username" autocomplete="username" required>
       <label class="fl">Password <span class="req">*</span></label>
       <div class="pw-wrap">
         <input id="pw" name="password" type="password" placeholder="Password" autocomplete="current-password" required>
@@ -605,7 +652,7 @@ def parent_login_view():
       <button type="submit" class="btn-green">Sign In</button>
     </form>
     <div class="divider">Or continue with</div>
-    <a class="alt-pill" href="{{ url_for('login_view') }}"><svg width="34" height="34" viewBox="0 0 34 34"><circle cx="17" cy="17" r="17" fill="#15b04a"/><circle cx="17" cy="13" r="4.6" fill="#fff"/><path d="M8.5 25.5c1.2-4.3 4.8-6.3 8.5-6.3s7.3 2 8.5 6.3" fill="#fff"/></svg><b>Sign in as school staff</b></a>
+    <a class="alt-pill" href="{{ url_for('login_view') }}"><svg width="34" height="34" viewBox="0 0 34 34"><circle cx="17" cy="17" r="17" fill="#14724B"/><circle cx="17" cy="13" r="4.6" fill="#fff"/><path d="M8.5 25.5c1.2-4.3 4.8-6.3 8.5-6.3s7.3 2 8.5 6.3" fill="#fff"/></svg><b>Sign in as school staff</b></a>
     """
     return page("Parent Login", body, nav=False)
 
@@ -757,23 +804,23 @@ def parent_child_view(adm_no):
 
 # ---- app-launcher metadata: icon, one-line description, group, pastel tint ----
 APP_META = {
-    "students_view":       ("\U0001F393", "Students",       "Search, enrol and manage learners",         "People",         "#E4EEFF"),
-    "staff_view":          ("\U0001F465", "Staff",          "Teachers, roles, assignments and HR",       "People",         "#EFE6FF"),
-    "departments_view":    ("\U0001F3DB", "Departments",    "Departments and heads of department",       "People",         "#E6F4EA"),
-    "alumni_view":         ("\U0001F3C5", "Alumni",         "Graduates and their contacts",              "People",         "#FFF1D6"),
-    "marks_view":          ("\u270F\uFE0F", "Marks",        "Enter, correct and submit marks",           "Teaching",       "#FFE9E0"),
-    "attendance_view":     ("\U0001F4CB", "Attendance",     "Class attendance reports",                  "Teaching",       "#E0F5F5"),
-    "timetable_view":      ("\U0001F5D3", "Timetable",      "Weekly lesson grids per class",             "Teaching",       "#E4EEFF"),
-    "exams_view":          ("\U0001F4DD", "Exams",          "Exams, grade breakdown and publishing",     "Teaching",       "#FFE9E0"),
-    "analytics_view":      ("\U0001F4CA", "Analytics",      "Improvement, remedial and risk lists",      "Teaching",       "#EFE6FF"),
-    "reports_view":        ("\U0001F5A8", "Reports",        "Class lists, merit lists, statements",      "Teaching",       "#E6F4EA"),
-    "calendar_view":       ("\U0001F4C5", "Calendar",       "School events and key dates",               "School life",    "#FFF1D6"),
-    "messages_view":       ("\U0001F4AC", "Messages",       "Staff inbox and compose",                   "School life",    "#E0F5F5"),
-    "notifications_view":  ("\U0001F514", "Notifications",  "Queued alerts and reminders",               "School life",    "#FFE9E0"),
-    "fees_view":           ("\U0001F4B0", "Fees",           "Invoices, payments, arrears, expenses",     "Administration", "#E6F4EA"),
-    "academic_setup_view": ("\u2699\uFE0F", "Academic Setup", "Subjects, streams and system controls",  "Administration", "#EFE6FF"),
-    "audit_log_view":      ("\U0001F50D", "Audit Log",      "Who changed what, and when",                "Administration", "#E4EEFF"),
-    "promotion_view":      ("\u2B06\uFE0F", "Promotion",    "End-of-year promotion and graduation",      "Administration", "#FFF1D6"),
+    "students_view":       ("\U0001F393", "Students",       "Search, enrol and manage learners",         "People",         "#DDF3E6"),
+    "staff_view":          ("\U0001F465", "Staff",          "Teachers, roles, assignments and HR",       "People",         "#D7EEE6"),
+    "departments_view":    ("\U0001F3DB", "Departments",    "Departments and heads of department",       "People",         "#E3F4D8"),
+    "alumni_view":         ("\U0001F3C5", "Alumni",         "Graduates and their contacts",              "People",         "#EAF5CF"),
+    "marks_view":          ("\u270F\uFE0F", "Marks",        "Enter, correct and submit marks",           "Teaching",       "#D3EFDF"),
+    "attendance_view":     ("\U0001F4CB", "Attendance",     "Class attendance reports",                  "Teaching",       "#D2EDEA"),
+    "timetable_view":      ("\U0001F5D3", "Timetable",      "Weekly lesson grids per class",             "Teaching",       "#DDF3E6"),
+    "exams_view":          ("\U0001F4DD", "Exams",          "Exams, grade breakdown and publishing",     "Teaching",       "#D3EFDF"),
+    "analytics_view":      ("\U0001F4CA", "Analytics",      "Improvement, remedial and risk lists",      "Teaching",       "#D7EEE6"),
+    "reports_view":        ("\U0001F5A8", "Reports",        "Class lists, merit lists, statements",      "Teaching",       "#E3F4D8"),
+    "calendar_view":       ("\U0001F4C5", "Calendar",       "School events and key dates",               "School life",    "#EAF5CF"),
+    "messages_view":       ("\U0001F4AC", "Messages",       "Staff inbox and compose",                   "School life",    "#D2EDEA"),
+    "notifications_view":  ("\U0001F514", "Notifications",  "Queued alerts and reminders",               "School life",    "#D3EFDF"),
+    "fees_view":           ("\U0001F4B0", "Fees",           "Invoices, payments, arrears, expenses",     "Administration", "#E3F4D8"),
+    "academic_setup_view": ("\u2699\uFE0F", "Academic Setup", "Subjects, streams and system controls",  "Administration", "#D7EEE6"),
+    "audit_log_view":      ("\U0001F50D", "Audit Log",      "Who changed what, and when",                "Administration", "#DDF3E6"),
+    "promotion_view":      ("\u2B06\uFE0F", "Promotion",    "End-of-year promotion and graduation",      "Administration", "#EAF5CF"),
 }
 APP_GROUP_ORDER = ["Teaching", "People", "School life", "Administration"]
 
@@ -799,7 +846,7 @@ def build_app_tiles(db, staff_no, unread=0):
         groups[group].append(
             f'<a class="app-tile" href="{url_for(endpoint)}">{badge}'
             f'<div class="app-icon" style="background:{tint}">{icon}</div>'
-            f'<div class="app-name">{name}</div><div class="app-desc">{desc}</div></a>'
+            f'<div class="app-name">{name}</div></a>'
         )
     return "".join(
         f'<div class="app-group">{g}</div><div class="app-grid">{"".join(tiles)}</div>'
@@ -862,6 +909,7 @@ def dashboard():
         )
 
     apps_html = build_app_tiles(db, staff_no, unread)
+    me_row = db.conn.execute("SELECT first_name FROM teachers WHERE staff_no=?", (staff_no,)).fetchone()
     db.close()
 
     role_pills = "".join(
@@ -885,39 +933,40 @@ def dashboard():
         for l in my_leave
     )
 
+    first = me_row["first_name"] if me_row else staff_no
+    hero_pills = "".join(
+        '<span class="pill">' + r["role"].replace("_", " ").title()
+        + (" &middot; " + r["scope"] if r["scope"] != "school" else "") + "</span>" for r in roles
+    ) or '<span class="pill">Teacher</span>'
+    class_btn = my_class_link.replace("background:var(--navy);color:#fff", "background:#fff;color:#0E4A33") if my_class_link else ""
+    today = datetime.now().strftime("%A, %d %B %Y")
+
     body = f"""
+    <div class="hero">
+      <div><h1>Welcome, {esc(first)}</h1><p>{today}</p></div>
+      <div class="pills">{hero_pills}{class_btn}</div>
+    </div>
     {apps_html}
     <div class="app-group">Overview</div>
-    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px">
-      <h3 style="margin-top:0">Your roles</h3>
-      {role_pills}
-      {f'<div style="margin-top:14px">{my_class_link}</div>' if my_class_link else ''}
+    <div class="split">
+      <div class="panel"><h3 style="margin-top:0">Your classes ({len(classes)})</h3><div>{class_chips or "-"}</div></div>
+      <div class="panel"><h3 style="margin-top:0">Enrolment</h3>{stats_html or "-"}</div>
     </div>
-    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px">
-      <h3 style="margin-top:0">Classes you can see ({len(classes)})</h3>
-      <div>{class_chips}</div>
-    </div>
-    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px">
-      <h3 style="margin-top:0">Enrolment &amp; staffing</h3>
-      {stats_html or "<p style='color:var(--ink-muted)'>No form-level access yet.</p>"}
-    </div>
-    <div style="background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;margin-bottom:16px">
+    <div class="panel" style="margin-top:14px">
       <h3 style="margin-top:0">My leave</h3>
       <table border="1" cellpadding="4"><tr><th>Type</th><th>Dates</th><th>Status</th></tr>
-        {leave_rows or "<tr><td colspan='3'>No leave requests yet.</td></tr>"}
+        {leave_rows or "<tr><td colspan='3'>None</td></tr>"}
       </table>
       <form method="post">
         <input type="hidden" name="action" value="request_leave">
-        Type: <select name="leave_type"><option>Annual</option><option>Sick</option><option>Compassionate</option>
+        <select name="leave_type"><option>Annual</option><option>Sick</option><option>Compassionate</option>
           <option>Maternity/Paternity</option></select>
-        Start: <input name="start_date" placeholder="2026-03-01">
-        End: <input name="end_date" placeholder="2026-03-05">
-        Notes: <input name="notes" size="20">
+        <input name="start_date" placeholder="Start 2026-03-01">
+        <input name="end_date" placeholder="End 2026-03-05">
+        <input name="notes" placeholder="Notes" size="20">
         <button type="submit">Request leave</button>
       </form>
     </div>
-    <p style="color:var(--ink-muted)">You have <b>{unread}</b> unread <a href="{url_for('messages_view')}">message(s)</a>.
-    Open an app above to get started.</p>
     """
     return page("Dashboard", body)
 
@@ -937,7 +986,7 @@ def students_view():
         results = db.search_students(request.form["query"], include_alumni=bool(request.form.get("include_alumni")))
     if request.method == "POST" and request.form.get("action") == "add":
         if not oversight:
-            flash("Only an executive (Principal/Deputy/Dean) may add new students.")
+            flash("Not allowed.")
         else:
             try:
                 adm_no = db.add_student(request.form["first_name"], request.form["last_name"],
@@ -945,23 +994,23 @@ def students_view():
                                          gender=request.form.get("gender") or None)
                 flash(f"Added student {adm_no}.")
             except (NotFound, ValueError) as e:
-                flash(str(e))
+                flash(_err(e))
     if request.method == "POST" and request.form.get("action") == "remove_student":
         try:
             db.remove_student_permanently(request.form["adm_no"], staff_no)
             flash(f"Student {request.form['adm_no']} permanently removed.")
         except (PermissionDenied, NotFound) as e:
-            flash(str(e))
+            flash(_err(e))
 
     if request.method == "POST" and request.form.get("action") == "save_student_grid":
         if not oversight:
-            flash("Only an executive may edit student details.")
+            flash("Not allowed.")
         elif request.form.get("remove"):
             try:
                 db.remove_student_permanently(request.form["remove"], staff_no)
                 flash("Student permanently removed.")
             except (PermissionDenied, NotFound) as e:
-                flash(str(e))
+                flash(_err(e))
         else:
             changed, errors, i = 0, [], 0
             while f"orig_{i}" in request.form:
@@ -1055,9 +1104,7 @@ def students_view():
       <button type="submit">Add</button>
     </form>
     """ if oversight else """
-    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">
-      Adding new students is available to the Principal, a Deputy Principal, or the Dean of Studies only.
-    </div>
+    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>
     """
 
     body = f"""
@@ -1071,7 +1118,7 @@ def students_view():
     {results_html}
 
     <h3>All students</h3>
-    {"<p class='hint'>Edit any cell directly, then press Save changes.</p>" if oversight else ""}
+    {"" if oversight else ""}
     <form method="get" style="margin-bottom:10px">
       Show form: <input name="grid_form" size="2" value="{esc(grid_form)}"> <button type="submit">Filter</button>
     </form>
@@ -1106,13 +1153,15 @@ def student_detail(adm_no):
                 flash("Discipline record added.")
             elif action == "payment":
                 if not can_view_finance:
-                    flash("Only this student's class teacher, form supervisor, or an executive may record payments.")
+                    flash("Not allowed.")
                 else:
                     db.record_payment(adm_no, float(request.form["amount"]), request.form["date"],
                                        int(request.form["term"]), int(request.form["year"]),
                                        request.form.get("method", "cash"), recorded_by=staff_no)
                     flash("Payment recorded -- a receipt is available below.")
             elif action == "update_profile":
+                if not db.has_full_oversight(staff_no):
+                    raise PermissionDenied("not allowed")
                 db.update_student(adm_no, first_name=request.form.get("first_name") or None,
                                    last_name=request.form.get("last_name") or None,
                                    form_number=int(request.form["new_form_number"]) if request.form.get("new_form_number") else None,
@@ -1122,7 +1171,7 @@ def student_detail(adm_no):
                 db.send_results_notification(adm_no, int(request.form["exam_id"]), request.form.get("channel", "sms"))
                 flash("Results notification queued for the parent.")
         except (PermissionDenied, NotFound, ValueError) as e:
-            flash(str(e))
+            flash(_err(e))
 
     try:
         class_code = db.class_code_of(adm_no)
@@ -1132,6 +1181,7 @@ def student_detail(adm_no):
     student_row = db.conn.execute(
         "SELECT first_name, last_name, form_number, stream_code FROM students WHERE adm_no=?", (adm_no,)
     ).fetchone()
+    can_edit_student = db.has_full_oversight(staff_no)
 
     term = request.values.get("term", "1")
     year = request.values.get("year", "2026")
@@ -1142,7 +1192,7 @@ def student_detail(adm_no):
     except NotFound as e:
         profile = {"attendance": {}, "attendance_rate": None, "discipline": [], "timetable": [],
                    "fee_balance": {"billed": 0, "paid": 0, "balance": 0}}
-        flash(str(e))
+        flash(_err(e))
 
     marks = []
     try:
@@ -1170,7 +1220,7 @@ def student_detail(adm_no):
             <p>Current mean: {proj['current_mean']} | Mean gap to {target_grade}: {proj['mean_gap']}</p>
             """
         except ValueError as e:
-            flash(str(e))
+            flash(_err(e))
 
     payments = []
     if can_view_finance:
@@ -1223,11 +1273,20 @@ def student_detail(adm_no):
         """
     else:
         finance_section = """
-        <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">
-          Financial details for this student are only visible to their class teacher, form
-          supervisor, or an executive.
-        </div>
+        <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>
         """
+
+    update_profile_html = f"""
+    <h3>Update profile</h3>
+    <form method="post">
+      <input type="hidden" name="action" value="update_profile">
+      First name: <input name="first_name" value="{student_row['first_name'] if student_row else ''}">
+      Last name: <input name="last_name" value="{student_row['last_name'] if student_row else ''}">
+      Move to Form: <input name="new_form_number" size="2" value="{student_row['form_number'] if student_row else ''}">
+      Stream: <input name="new_stream" size="8" value="{student_row['stream_code'] if student_row else ''}">
+      <button type="submit">Update</button>
+    </form>
+    """ if can_edit_student else ""
 
     body = f"""
     <p>Class: {class_code} | Attendance rate: {profile['attendance_rate']}% </p>
@@ -1255,23 +1314,12 @@ def student_detail(adm_no):
       Channel: <select name="channel"><option>sms</option><option>email</option></select>
       <button type="submit">Send</button>
     </form>
-    <p style="font-size:12px;color:var(--ink-muted)">Only works once results are published; queues a
-    notification (no live SMS/email provider connected yet).</p>
-
     {finance_section}
 
     <h3>Class timetable</h3>
     <table border="1" cellpadding="4"><tr><th>Day</th><th>Period</th><th>Subject</th><th>Teacher</th></tr>{tt_rows}</table>
 
-    <h3>Update profile</h3>
-    <form method="post">
-      <input type="hidden" name="action" value="update_profile">
-      First name: <input name="first_name" value="{student_row['first_name'] if student_row else ''}">
-      Last name: <input name="last_name" value="{student_row['last_name'] if student_row else ''}">
-      Move to Form: <input name="new_form_number" size="2" value="{student_row['form_number'] if student_row else ''}">
-      Stream: <input name="new_stream" size="8" value="{student_row['stream_code'] if student_row else ''}">
-      <button type="submit">Update</button>
-    </form>
+    {update_profile_html}
 
     <h3>Record attendance</h3>
     <form method="post">
@@ -1314,7 +1362,7 @@ def receipt_pdf(payment_id):
     )
     if not allowed:
         db.close()
-        flash("Only that student's class teacher, form supervisor, or an executive may view this receipt.")
+        flash("Not allowed.")
         return redirect(url_for("students_view"))
     from receipt import generate_receipt
     tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -1322,7 +1370,7 @@ def receipt_pdf(payment_id):
         generate_receipt(db, payment_id, tmp.name)
         return send_file(tmp.name, as_attachment=True)
     except ValueError as e:
-        flash(str(e))
+        flash(_err(e))
         return redirect(url_for("students_view"))
     finally:
         db.close()
@@ -1346,7 +1394,7 @@ def staff_view():
         try:
             if action == "add_teacher":
                 if not oversight:
-                    flash("Only an executive (Principal/Deputy/Dean) may add new teacher accounts.")
+                    flash("Not allowed.")
                 else:
                     new_no = db.add_teacher(request.form["first_name"], request.form["last_name"],
                                              email=request.form.get("email") or None)
@@ -1354,7 +1402,7 @@ def staff_view():
                     flash(f"Added teacher {new_no}, temp password: {temp_pw}")
             elif action == "grant_role":
                 if not oversight:
-                    flash("Only an executive (Principal/Deputy/Dean) may grant roles.")
+                    flash("Not allowed.")
                 else:
                     db.grant_role(request.form["target_staff_no"], request.form["role"],
                                    request.form.get("scope", "school"))
@@ -1386,26 +1434,26 @@ def staff_view():
                 flash("Subject teacher unassigned from that class.")
             elif action == "delegate_staffing":
                 if not oversight:
-                    flash("Only an executive may delegate staffing management for a form.")
+                    flash("Not allowed.")
                 else:
                     db.grant_staffing_manager(int(request.form["form_number"]), request.form["target_staff_no"])
                     flash("Staffing manager delegated for that form.")
             elif action == "revoke_staffing":
                 if not oversight:
-                    flash("Only an executive may revoke a staffing delegation.")
+                    flash("Not allowed.")
                 else:
                     db.revoke_staffing_manager(int(request.form["form_number"]), request.form["target_staff_no"])
                     flash("Staffing delegation revoked.")
             elif action == "revoke_role":
                 if not oversight:
-                    flash("Only an executive (Principal/Deputy/Dean) may revoke roles.")
+                    flash("Not allowed.")
                 else:
                     db.revoke_role(request.form["target_staff_no"], request.form["role"],
                                     request.form.get("scope", "school"))
                     flash("Role revoked.")
             elif action == "set_id_criteria":
                 if not oversight:
-                    flash("Only an executive may configure admission/staff numbering.")
+                    flash("Not allowed.")
                 else:
                     kind = request.form["kind"]
                     db.set_id_criteria(
@@ -1417,7 +1465,7 @@ def staff_view():
                     flash(f"{kind.title()} numbering criteria updated.")
             elif action == "add_contract":
                 if not oversight:
-                    flash("Only an executive may add staff contracts.")
+                    flash("Not allowed.")
                 else:
                     db.add_contract(request.form["target_staff_no"], request.form["contract_type"],
                                      request.form["start_date"], request.form.get("end_date") or None,
@@ -1429,7 +1477,7 @@ def staff_view():
                 flash("Leave request updated.")
             elif action == "save_teacher_grid":
                 if not oversight:
-                    flash("Only an executive may edit staff details.")
+                    flash("Not allowed.")
                 elif request.form.get("remove"):
                     db.remove_teacher_permanently(request.form["remove"], staff_no)
                     flash(f"Teacher {request.form['remove']} permanently removed.")
@@ -1459,7 +1507,7 @@ def staff_view():
                     flash(msg)
             elif action == "edit_teacher":
                 if not oversight:
-                    flash("Only an executive may edit a teacher's name or staff number.")
+                    flash("Not allowed.")
                 else:
                     new_no = db.update_teacher(
                         request.form["target_staff_no"],
@@ -1473,7 +1521,7 @@ def staff_view():
                     db.remove_teacher_permanently(request.form["target_staff_no"], staff_no)
                     flash(f"Teacher {request.form['target_staff_no']} permanently removed.")
                 except (PermissionDenied, NotFound) as e:
-                    flash(str(e))
+                    flash(_err(e))
             elif action == "create_group":
                 db.create_teacher_group(request.form["group_name"])
                 flash("Teacher group created.")
@@ -1484,7 +1532,7 @@ def staff_view():
                 db.remove_from_group(int(request.form["group_id"]), request.form["target_staff_no"])
                 flash("Removed from group.")
         except (PermissionDenied, NotFound, ValueError) as e:
-            flash(str(e))
+            flash(_err(e))
 
     # ---- Tier 1: full oversight sees everything, including everyone's roles ----
     if oversight:
@@ -1509,8 +1557,7 @@ def staff_view():
             )
 
         roster_section = (
-            "<h3>Staff</h3><p class='hint'>Edit names or staff numbers directly in the table, then press "
-            "Save changes.</p>"
+            "<h3>Staff</h3>"
             "<form method='post' class='grid-form'><input type='hidden' name='action' value='save_teacher_grid'>"
             "<button type='submit' style='position:absolute;left:-9999px' tabindex='-1' aria-hidden='true'>Save</button>"
             "<div class='grid-wrap'><table><thead><tr><th>Staff No</th><th>First name</th><th>Last name</th>"
@@ -1522,8 +1569,6 @@ def staff_view():
         staff_criteria = db.get_id_criteria("staff")
         id_settings_section = f"""
         <h3>Admission &amp; staff numbering criteria</h3>
-        <p style="font-size:12px;color:var(--ink-muted)">Controls how admission numbers and staff
-        numbers are auto-generated when you don't type one in yourself.</p>
         <form method="post">
           <input type="hidden" name="action" value="set_id_criteria">
           <input type="hidden" name="kind" value="admission">
@@ -1540,8 +1585,6 @@ def staff_view():
           Next number: <input name="next_number" value="{staff_criteria['next']}" size="6">
           <button type="submit">Update</button>
         </form>
-        <p style="font-size:12px;color:var(--ink-muted)">Example: prefix "2026", padding 3, next 1
-        would generate admission numbers 2026001, 2026002, ...</p>
         """
 
         pending_leave = [l for l in db.list_leave() if l["status"] == "pending"]
@@ -1628,9 +1671,6 @@ def staff_view():
           <tr><td>Class teacher</td><td>Full access to their one class: marks, attendance, discipline, fees, receipts</td></tr>
           <tr><td>Subject teacher</td><td>Marks entry only, only for the subject(s)/class(es) they're assigned to</td></tr>
         </table>
-        <p style="font-size:12px;color:var(--ink-muted)">"Full oversight" means: sees every class,
-        every department, every student's finances, can publish results, and can run end-of-year
-        promotion. Only the four executive roles above have it.</p>
         """
         staffing_delegation_section = """
         <h3>Delegate staffing manager for a form</h3>
@@ -1646,8 +1686,6 @@ def staff_view():
           Staff No: <input name="target_staff_no"> Form: <input name="form_number" size="2" value="1">
           <button type="submit">Revoke</button>
         </form>
-        <p style="font-size:12px;color:var(--ink-muted)">A delegated staffing manager can assign class
-        teachers, supervisors, and subject teachers for that one form, without needing an executive role.</p>
         """
     else:
         roster_section = ""
@@ -1663,7 +1701,7 @@ def staff_view():
         default_form = my_staffing_forms[0] if my_staffing_forms else 1
         assignment_section = f"""
         <h3>Assign / remove class teacher</h3>
-        <p style="font-size:12px;color:var(--ink-muted)">You may assign staff for: {scope_note}.</p>
+        <p style="font-size:12px;color:var(--ink-muted)">Scope: {scope_note}</p>
         <form method="post">
           <input type="hidden" name="action" value="class_teacher">
           Staff No: <input name="target_staff_no">
@@ -1706,17 +1744,10 @@ def staff_view():
           Stream: <input name="stream" value="White">
           <button type="submit">Unassign</button>
         </form>
-        <p style="font-size:12px;color:var(--ink-muted)">To reassign someone, just assign the new
-        person directly -- it overwrites whoever was there before. Use "remove"/"unassign" when you
-        want the slot to go back to Unassigned instead of being replaced.</p>
         """
     else:
         assignment_section = """
-        <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">
-          You don't currently have staff-assignment permissions for any form. If you need a class
-          teacher, supervisor, or subject teacher changed, contact the Principal, a Deputy Principal,
-          or the Dean of Studies.
-        </div>
+        <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>
         """
 
     # ---- Teacher groups: organizational, not a "power" reveal -- open to everyone logged in ----
@@ -1777,7 +1808,7 @@ def departments_view():
                 db.assign_hod(request.form["department_code"], request.form["target_staff_no"])
                 flash("HOD assigned.")
         except (PermissionDenied, NotFound, ValueError) as e:
-            flash(str(e))
+            flash(_err(e))
 
     depts = db.conn.execute("SELECT * FROM departments").fetchall()
     row_htmls = []
@@ -1813,192 +1844,172 @@ def departments_view():
 # ----------------------------------------------------------------------
 # marks
 # ----------------------------------------------------------------------
+def _marks_options(db, staff_no):
+    """Only the classes and subjects this person may work on:
+    [(class_code, form, stream_code, [subject names], stream_name)]."""
+    subjects = db.list_subjects()
+    scope = db.teacher_scope(staff_no)
+    assigned = {}
+    for subj_code, class_code in scope["subject_assignments"]:
+        assigned.setdefault(class_code, set()).add(subj_code)
+    out = []
+    for cc in sorted(db.visible_classes(staff_no)):
+        form, stream = int(cc[0]), cc[1:]
+        if not db.conn.execute("SELECT 1 FROM students WHERE form_number=? AND stream_code=? LIMIT 1",
+                               (form, stream)).fetchone():
+            continue
+        if db._can_manage_class(staff_no, form, stream):
+            names = [x["name"] for x in subjects]
+        else:
+            names = [x["name"] for x in subjects if x["code"] in assigned.get(cc, ())]
+        if names:
+            st = db.conn.execute("SELECT name FROM streams WHERE form_number=? AND code=?", (form, stream)).fetchone()
+            out.append((cc, form, stream, names, st["name"] if st else stream))
+    return out
+
+
 @app.route("/marks", methods=["GET", "POST"])
 def marks_view():
     ctx = _guard()
     if ctx is None:
         return redirect(url_for("login_view"))
     db, staff_no = ctx
+    from db import subject_code as _subject_code
 
-    form_number = request.values.get("form_number", "1")
-    stream = request.values.get("stream", "White")
-    exam_id = request.values.get("exam_id", "1")
-    subject = request.values.get("subject", "Maths")
+    options = _marks_options(db, staff_no)
+    exams = db.conn.execute("SELECT id, name, term, year FROM exams ORDER BY year DESC, term DESC, id DESC").fetchall()
+    published = {e["id"]: db.is_exam_published(e["id"]) for e in exams}
+    oversight = db.has_full_oversight(staff_no)
+
+    def _allowed(form, stream, subject):
+        return any(o[1] == form and o[2] == stream and subject in o[3] for o in options)
+
+    src = request.form if request.method == "POST" else request.args
+    if request.method == "POST":
+        raw = (src.get("grid_form", ""), src.get("grid_stream", ""), src.get("grid_subject", ""))
+        exam_raw = src.get("grid_exam_id", "")
+    else:
+        raw = tuple((src.get("sel", "").split("|") + ["", "", ""])[:3])
+        exam_raw = src.get("exam_id", "")
+    pick_form = int(raw[0]) if raw[0].isdigit() else None
+    stream_code, subject = raw[1], raw[2]
+    selected = pick_form is not None and _allowed(pick_form, stream_code, subject)
+    if not selected and request.method == "GET" and not src.get("sel") and options:
+        _cc, pick_form, stream_code, names, _sn = options[0]
+        subject, selected = names[0], True
+    exam_id = int(exam_raw) if exam_raw.isdigit() and int(exam_raw) in published else (exams[0]["id"] if exams else None)
+    sel_value = f"{pick_form}|{stream_code}|{subject}" if selected else ""
 
     if request.method == "POST":
         action = request.form.get("action")
         try:
-            if action == "bulk_save":
-                scores = {}
-                for key, val in request.form.items():
-                    if key.startswith("score_"):
-                        adm = key[len("score_"):]
-                        scores[adm] = float(val) if val.strip() != "" else None
-                result = db.save_class_marks_bulk(staff_no, request.form["grid_subject"],
-                                                   int(request.form["grid_exam_id"]),
-                                                   int(request.form["grid_form"]), request.form["grid_stream"],
-                                                   scores)
-                msg = f"Saved {result['saved']} score(s) as drafts."
+            if not selected or exam_id is None:
+                flash("Not allowed.")
+            elif published.get(exam_id):
+                flash("Published.")
+            elif action == "bulk_save":
+                scores = {k[len("score_"):]: (float(v) if v.strip() != "" else None)
+                          for k, v in request.form.items() if k.startswith("score_")}
+                result = db.save_class_marks_bulk(staff_no, subject, exam_id, pick_form, stream_code, scores)
+                msg = f"Saved {result['saved']}."
                 if result["errors"]:
-                    msg += f" {len(result['errors'])} row(s) failed: " + \
-                           "; ".join(f"{e['adm_no']}: {e['error']}" for e in result["errors"][:3])
+                    msg += f" {len(result['errors'])} not saved."
                 flash(msg)
             elif action == "bulk_submit":
-                n = db.submit_class_marks(staff_no, request.form["grid_subject"], int(request.form["grid_exam_id"]),
-                                           int(request.form["grid_form"]), request.form["grid_stream"])
-                flash(f"Submitted {n} draft score(s) for this subject/class.")
+                n = db.submit_class_marks(staff_no, subject, exam_id, pick_form, stream_code)
+                flash(f"Submitted {n}.")
             elif action == "import_csv":
                 file = request.files.get("csv_file")
                 if not file or not file.filename:
-                    flash("Choose a CSV file first.")
+                    flash("Choose a file.")
                 else:
                     import csv, io
-                    text = file.read().decode("utf-8-sig")
-                    reader = csv.DictReader(io.StringIO(text))
+                    reader = csv.DictReader(io.StringIO(file.read().decode("utf-8-sig")))
                     scores = {}
                     for row in reader:
                         adm = (row.get("Adm No") or row.get("adm_no") or "").strip()
-                        score_str = (row.get("Score") or row.get("score") or "").strip()
+                        sc = (row.get("Score") or row.get("score") or "").strip()
                         if adm:
-                            scores[adm] = float(score_str) if score_str else None
-                    result = db.save_class_marks_bulk(staff_no, request.form["grid_subject"],
-                                                       int(request.form["grid_exam_id"]),
-                                                       int(request.form["grid_form"]), request.form["grid_stream"],
-                                                       scores)
-                    flash(f"Imported CSV: saved {result['saved']} score(s) as drafts, "
-                          f"{len(result['errors'])} error(s).")
-            elif action == "edit_submitted":
-                db.edit_submitted_mark(staff_no, request.form["adm_no"], request.form["subject"],
-                                        int(request.form["exam_id"]), float(request.form["new_score"]))
-                flash("Submitted mark corrected.")
+                            scores[adm] = float(sc) if sc else None
+                    result = db.save_class_marks_bulk(staff_no, subject, exam_id, pick_form, stream_code, scores)
+                    flash(f"Imported {result['saved']}.")
         except (PermissionDenied, NotFound, ValueError) as e:
-            flash(str(e))
+            flash(_err(e))
+        db.close()
+        return redirect(url_for("marks_view", sel=sel_value, exam_id=exam_id or ""))
 
-    fn = int(form_number)
-    stream_code = None
-    try:
-        stream_code = db._resolve_stream_code(fn, stream)
-    except NotFound as e:
-        flash(str(e))
+    # ---- pickers: only this person's own classes/subjects ----
+    groups = "".join(
+        f"<optgroup label='{esc(cc)} ({esc(sn)})'>"
+        + "".join(f"<option value='{form}|{st}|{esc(n)}'{' selected' if f'{form}|{st}|{n}' == sel_value else ''}>{esc(cc)} &middot; {esc(n)}</option>"
+                  for n in names)
+        + "</optgroup>"
+        for cc, form, st, names, sn in options
+    )
+    exam_opts = "".join(
+        f"<option value='{e['id']}'{' selected' if e['id'] == exam_id else ''}>{esc(e['name'])}"
+        f"{' (published)' if published[e['id']] else ''}</option>" for e in exams
+    )
+    picker = (
+        "<form method='get' class='pick'>"
+        f"<select name='sel' onchange='this.form.submit()'>{groups}</select>"
+        f"<select name='exam_id' onchange='this.form.submit()'>{exam_opts}</select>"
+        "<noscript><button type='submit'>Open</button></noscript></form>"
+    ) if options and exams else "<div class='panel'>Nothing to show.</div>"
 
-    # ---- permission-aware context for this class, computed once ----
-    is_class_manager = False
-    class_teacher_name = "the class teacher"
-    my_assigned_subjects: List[str] = []
-    if stream_code:
-        stream_row = db.conn.execute(
-            "SELECT class_teacher_staff_no FROM streams WHERE form_number=? AND code=?", (fn, stream_code)
-        ).fetchone()
-        if stream_row and stream_row["class_teacher_staff_no"]:
-            ct = db.conn.execute(
-                "SELECT first_name, last_name, staff_no FROM teachers WHERE staff_no=?",
-                (stream_row["class_teacher_staff_no"],),
-            ).fetchone()
-            if ct:
-                class_teacher_name = f"{ct['first_name']} {ct['last_name']} ({ct['staff_no']})"
-        is_class_manager = db._can_manage_class(staff_no, fn, stream_code)
-        scope = db.teacher_scope(staff_no)
-        my_assigned_subjects = [s for s, cc in scope["subject_assignments"] if cc == f"{fn}{stream_code}"]
-
-    can_enter = is_class_manager or bool(my_assigned_subjects)
-
-    # ---- the spreadsheet-style grid: one row per student, editable score cell ----
+    # ---- grid ----
     grid_html = ""
-    if can_enter and stream_code:
-        students = db.conn.execute(
-            "SELECT adm_no, first_name, last_name FROM students WHERE form_number=? AND stream_code=? "
-            "ORDER BY last_name", (fn, stream_code),
-        ).fetchall()
-        code_for_lookup = subject_code_lookup = None
-        from db import subject_code as _subject_code
+    if selected and exam_id is not None:
+        is_pub = published[exam_id]
+        manager = db._can_manage_class(staff_no, pick_form, stream_code)
         subj_code = _subject_code(subject)
-        grid_rows = ""
-        for s in students:
+        students = db.conn.execute(
+            "SELECT adm_no, first_name, last_name FROM students WHERE form_number=? AND stream_code=? ORDER BY last_name",
+            (pick_form, stream_code)).fetchall()
+        rows = ""
+        for st_row in students:
             mark = db.conn.execute(
                 "SELECT score, status FROM marks WHERE student_adm_no=? AND subject_code=? AND exam_id=?",
-                (s["adm_no"], subj_code, int(exam_id)),
-            ).fetchone()
+                (st_row["adm_no"], subj_code, exam_id)).fetchone()
             value = mark["score"] if mark else ""
-            status = mark["status"] if mark else "empty"
-            status_color = {"draft": "#EFE6C8", "submitted": "#D9E8DE", "empty": "#fff"}[status]
-            locked = mark and mark["status"] == "submitted" and not is_class_manager
-            adm_no_val = s["adm_no"]
-            cell_style = (
-                "width:70px;text-align:center;background:#eee;color:#888;cursor:not-allowed"
-                if locked else "width:70px;text-align:center"
+            status = mark["status"] if mark else ""
+            locked = is_pub or bool(mark and mark["status"] == "submitted" and not manager)
+            shade = "#E9EFEB" if locked else ({"draft": "#FFF6DA", "submitted": "#DDF3E6"}.get(status, "#fff"))
+            style = "width:70px;text-align:center;" + ("background:#E9EFEB;color:#7B8C82;cursor:not-allowed;" if locked else "")
+            rows += (
+                f"<tr><td class='mono'>{esc(st_row['adm_no'])}</td>"
+                f"<td>{esc(st_row['first_name'])} {esc(st_row['last_name'])}</td>"
+                f"<td style='background:{shade}'><input name='score_{esc(st_row['adm_no'])}' value='{value}' size='5' "
+                f"{'readonly disabled' if locked else ''} style='{style}'></td>"
+                f"<td style='font-size:12px;color:var(--ink-muted)'>{'-' if not status else status}</td></tr>"
             )
-            status_label = f"{status} (locked -- contact {class_teacher_name})" if locked else status
-            tooltip = "Locked: only the class teacher can edit a submitted mark." if locked else ""
-            grid_rows += (
-                f"<tr><td class='mono'>{s['adm_no']}</td><td>{s['first_name']} {s['last_name']}</td>"
-                f"<td style='background:{status_color}' title='{tooltip}'>"
-                f"<input name='score_{adm_no_val}' value='{value}' size='5' "
-                f"{'readonly disabled' if locked else ''} style='{cell_style}'></td>"
-                f"<td style='font-size:11px;color:var(--ink-muted)'>{status_label}</td></tr>"
-            )
-        grid_html = f"""
-        <h3>Marks entry &amp; correction grid &mdash; {subject} ({form_number}{stream_code}), Exam {exam_id}</h3>
-        <p style="font-size:12px;color:var(--ink-muted)">
-          {"Type a score for each student and Save All. Submitted rows (green) can also be corrected here since you're the class teacher/supervisor." if is_class_manager else "Type a score for each student and Save All. Submitted rows (green) are locked -- contact " + class_teacher_name + " to request a correction."}
-          Blank cells are left untouched when you save.
-        </p>
-        <form method="post">
-          <input type="hidden" name="grid_form" value="{form_number}">
-          <input type="hidden" name="grid_stream" value="{stream}">
-          <input type="hidden" name="grid_subject" value="{subject}">
-          <input type="hidden" name="grid_exam_id" value="{exam_id}">
-          <div style="max-height:480px;overflow-y:auto;border:1px solid var(--border);border-radius:8px">
-            <table style="margin-bottom:0">
-              <thead><tr><th>Adm No</th><th>Name</th><th>Score</th><th>Status</th></tr></thead>
-              <tbody>{grid_rows}</tbody>
-            </table>
-          </div>
-          <div style="margin-top:10px">
-            <button type="submit" name="action" value="bulk_save">Save All</button>
-            <button type="submit" name="action" value="bulk_submit">Submit All Drafts</button>
-          </div>
-        </form>
-
-        <h4 style="font-family:'Space Grotesk',sans-serif;color:var(--navy-2);font-size:13px">
-          Import / export like Excel</h4>
-        <a href="{url_for('marks_csv_export')}?form_number={form_number}&stream={stream}&subject={subject}&exam_id={exam_id}"
-           style="display:inline-block;background:var(--navy);color:#fff;padding:7px 14px;border-radius:7px;
-           text-decoration:none;font-weight:600;font-size:12px;margin-right:10px">
-           Download CSV template</a>
-        <form method="post" enctype="multipart/form-data" style="display:inline-flex">
-          <input type="hidden" name="action" value="import_csv">
-          <input type="hidden" name="grid_form" value="{form_number}">
-          <input type="hidden" name="grid_stream" value="{stream}">
-          <input type="hidden" name="grid_subject" value="{subject}">
-          <input type="hidden" name="grid_exam_id" value="{exam_id}">
-          <input type="file" name="csv_file" accept=".csv">
-          <button type="submit">Import CSV</button>
-        </form>
-        <p style="font-size:12px;color:var(--ink-muted)">Download the template, edit scores in Excel,
-        save as CSV, then import it back here -- column headers "Adm No" and "Score" are required.</p>
-        """
-    elif not can_enter:
-        grid_html = f"""
-        <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">
-          You are not assigned to teach any subject in class {form_number}{stream_code or stream}.
-          Ask an executive or that form's staffing manager to assign you before you can enter marks here.
-        </div>
-        """
+        hidden = (f"<input type='hidden' name='grid_form' value='{pick_form}'>"
+                  f"<input type='hidden' name='grid_stream' value='{esc(stream_code)}'>"
+                  f"<input type='hidden' name='grid_subject' value='{esc(subject)}'>"
+                  f"<input type='hidden' name='grid_exam_id' value='{exam_id}'>")
+        badge = "<span class='locked-note'>Published</span>" if is_pub else ""
+        unpublish = ""
+        if is_pub and oversight:
+            unpublish = (f" <a href='{url_for('exams_view')}' style='font-size:12px'>Unpublish</a>")
+        actions = "" if is_pub else (
+            "<div class='grid-actions'><button type='submit' name='action' value='bulk_save'>Save</button> "
+            "<button type='submit' name='action' value='bulk_submit'>Submit</button></div>")
+        tools = "" if is_pub else (
+            "<form method='post' enctype='multipart/form-data' style='margin-top:6px'>"
+            f"{hidden}<input type='hidden' name='action' value='import_csv'>"
+            "<input type='file' name='csv_file' accept='.csv'> <button type='submit'>Import CSV</button></form>")
+        export = (f"<a href='{url_for('marks_csv_export', sel=sel_value, exam_id=exam_id)}' "
+                  "style='font-size:13px;font-weight:600'>Download CSV</a>")
+        grid_html = (
+            f"<h3>{esc(subject)} &middot; {pick_form}{esc(stream_code)} {badge}{unpublish}</h3>"
+            f"<form method='post' class='grid-form'>{hidden}"
+            "<div class='grid-wrap' style='max-height:60vh" + (";opacity:.85" if is_pub else "") + "'><table><thead><tr>"
+            "<th>Adm No</th><th>Name</th><th>Score</th><th>Status</th></tr></thead><tbody>" + rows + "</tbody></table></div>"
+            f"{actions}</form>{export}{tools}"
+        )
 
     db.close()
-
-    body = f"""
-    <form method="get">
-      Form: <input name="form_number" size="2" value="{form_number}">
-      Stream: <input name="stream" value="{stream}">
-      Subject: <input name="subject" value="{subject}">
-      Exam ID: <input name="exam_id" size="4" value="{exam_id}">
-      <button type="submit">Load grid</button>
-    </form>
-
-    {grid_html}
-    """
-    return page("Marks", body)
+    return page("Marks", picker + grid_html)
 
 
 @app.route("/marks/export.csv")
@@ -2008,36 +2019,33 @@ def marks_csv_export():
         return redirect(url_for("login_view"))
     db, staff_no = ctx
     import csv, io
-    fn = int(request.args["form_number"])
-    stream = request.args["stream"]
-    subject = request.args["subject"]
-    exam_id = int(request.args["exam_id"])
     from db import subject_code as _subject_code
+    parts = (request.args.get("sel", "").split("|") + ["", "", ""])[:3]
+    options = _marks_options(db, staff_no)
+    ok = parts[0].isdigit() and any(o[1] == int(parts[0]) and o[2] == parts[1] and parts[2] in o[3] for o in options)
+    if not ok:
+        db.close()
+        flash("Not allowed.")
+        return redirect(url_for("marks_view"))
+    fn, stream_code, subject = int(parts[0]), parts[1], parts[2]
+    exam_id = int(request.args.get("exam_id", "0") or 0)
     subj_code = _subject_code(subject)
-    stream_code = db._resolve_stream_code(fn, stream)
     students = db.conn.execute(
-        "SELECT adm_no, first_name, last_name FROM students WHERE form_number=? AND stream_code=? "
-        "ORDER BY last_name", (fn, stream_code),
-    ).fetchall()
+        "SELECT adm_no, first_name, last_name FROM students WHERE form_number=? AND stream_code=? ORDER BY last_name",
+        (fn, stream_code)).fetchall()
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["Adm No", "Name", "Score"])
-    for s in students:
-        mark = db.conn.execute(
-            "SELECT score FROM marks WHERE student_adm_no=? AND subject_code=? AND exam_id=?",
-            (s["adm_no"], subj_code, exam_id),
-        ).fetchone()
-        writer.writerow([s["adm_no"], f"{s['first_name']} {s['last_name']}", mark["score"] if mark else ""])
+    for st_row in students:
+        mark = db.conn.execute("SELECT score FROM marks WHERE student_adm_no=? AND subject_code=? AND exam_id=?",
+                               (st_row["adm_no"], subj_code, exam_id)).fetchone()
+        writer.writerow([st_row["adm_no"], f"{st_row['first_name']} {st_row['last_name']}", mark["score"] if mark else ""])
     db.close()
     from flask import Response
-    return Response(
-        buf.getvalue(), mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={subject}_{fn}{stream_code}_exam{exam_id}.csv"},
-    )
+    return Response(buf.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename={subject}_{fn}{stream_code}_exam{exam_id}.csv"})
 
 
-# ----------------------------------------------------------------------
-# attendance
 # ----------------------------------------------------------------------
 @app.route("/attendance", methods=["GET"])
 def attendance_view():
@@ -2051,7 +2059,7 @@ def attendance_view():
     try:
         report = db.class_attendance_report(int(form_number), stream)
     except NotFound as e:
-        flash(str(e))
+        flash(_err(e))
     db.close()
     rows = "".join(f"<tr><td>{r['adm_no']}</td><td>{r['name']}</td><td>{r['attendance_rate']}</td></tr>"
                     for r in report)
@@ -2086,7 +2094,7 @@ def timetable_view():
         except ValueError as e:
             flash(f"Could not save: {e}")
         except NotFound as e:
-            flash(str(e))
+            flash(_err(e))
 
     form_number = request.values.get("form_number", "1")
     stream = request.values.get("stream", "White")
@@ -2094,7 +2102,7 @@ def timetable_view():
     try:
         grid_data = db.get_timetable_grid(int(form_number), stream)
     except NotFound as e:
-        flash(str(e))
+        flash(_err(e))
     db.close()
 
     grid_html = ""
@@ -2129,9 +2137,6 @@ def timetable_view():
       <button type="submit">View</button>
     </form>
     {grid_html}
-    <p style="font-size:12px;color:var(--ink-muted)">Each box shows the subject with the teacher's
-    initials in the bottom-right corner.</p>
-
     <h3>Add timetable entry</h3>
     <form method="post">
       Form: <input name="form_number" size="2" value="{form_number}">
@@ -2145,8 +2150,6 @@ def timetable_view():
       Teacher Staff No: <input name="target_staff_no">
       <button type="submit">Save</button>
     </form>
-    <p style="font-size:12px;color:var(--ink-muted)">Scheduling refuses to double-book a teacher into
-    two classes at the same day/period.</p>
     """
     return page("Timetable", body)
 
@@ -2176,7 +2179,7 @@ def calendar_view():
                 db.delete_event(int(request.form["event_id"]), staff_no)
                 flash("Event deleted.")
         except (PermissionDenied, NotFound, ValueError) as e:
-            flash(str(e))
+            flash(_err(e))
 
     start = request.args.get("start")
     end = request.args.get("end")
@@ -2236,11 +2239,7 @@ def fees_view():
     if not db.has_full_oversight(staff_no):
         db.close()
         body = """
-        <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">
-          The financial system is only visible to the Principal, a Deputy Principal, or the
-          Dean of Studies. If a parent needs to know a balance, ask that student's class teacher
-          to look it up from the student's own profile page.
-        </div>
+        <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>
         """
         return page("Fees", body)
 
@@ -2277,15 +2276,15 @@ def fees_view():
                     int(request.form["term"]), int(request.form["year"]),
                 )
                 if result["status"] == "duplicate_ignored":
-                    flash(f"Reference already processed -- no double-credit applied. Live balance: {result['balance']}")
+                    flash("Already recorded.")
                 else:
-                    flash(f"Payment auto-detected and recorded. Live balance: {result['balance']}")
+                    flash(f"Recorded. Balance: {result['balance']}")
             elif action == "add_pledge":
                 db.add_pledge(request.form["adm_no"], float(request.form["amount"]),
                               request.form.get("expected_date") or None, request.form.get("notes", ""))
                 flash("Pledge recorded.")
         except (PermissionDenied, NotFound, ValueError) as e:
-            flash(str(e))
+            flash(_err(e))
 
     term = request.values.get("term", "1")
     year = request.values.get("year", "2026")
@@ -2338,11 +2337,6 @@ def fees_view():
     </form>
 
     <h3>Simulate an incoming payment (auto-detection)</h3>
-    <p style="font-size:12px;color:var(--ink-muted)">
-      This mimics what a real bank/paybill webhook would POST when a parent pays directly.
-      The balance updates immediately, and re-sending the same reference is safely ignored
-      (no double-crediting).
-    </p>
     <form method="post">
       <input type="hidden" name="action" value="simulate_payment">
       Channel code: <input name="channel_code" size="8"> Reference: <input name="reference" size="14">
@@ -2390,8 +2384,6 @@ def fees_view():
       <tr><th>Date</th><th>Category</th><th>Amount</th><th>Description</th><th>Receipt</th></tr>
       {expense_rows or '<tr><td colspan="5">No expenses recorded yet.</td></tr>'}
     </table>
-    <p style="font-size:12px;color:var(--ink-muted)">Manual payments and receipts are recorded from a
-    student's own page (Students &rarr; View).</p>
     """
     return page("Fees", body)
 
@@ -2405,7 +2397,7 @@ def receipt_file(filename):
     oversight = db.has_full_oversight(staff_no)
     db.close()
     if not oversight:
-        flash("Only an executive may view uploaded receipts.")
+        flash("Not allowed.")
         return redirect(url_for("dashboard"))
     from flask import send_from_directory
     return send_from_directory(UPLOAD_DIR, filename, as_attachment=False)
@@ -2419,7 +2411,7 @@ def financial_statement_pdf():
     db, staff_no = ctx
     if not db.has_full_oversight(staff_no):
         db.close()
-        flash("The financial statement is only available to the Principal, a Deputy Principal, or the Dean of Studies.")
+        flash("Not allowed.")
         return redirect(url_for("reports_view"))
     term, year = int(request.args["term"]), int(request.args["year"])
     tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -2444,7 +2436,7 @@ def exams_view():
         try:
             if action == "add_exam":
                 if not db.has_full_oversight(staff_no):
-                    flash("Only an executive (Principal/Deputy/Dean) may create a new exam.")
+                    flash("Not allowed.")
                 else:
                     exam_id = db.add_exam(request.form["name"], int(request.form["term"]), int(request.form["year"]),
                                            request.form.get("category", "General"),
@@ -2452,7 +2444,7 @@ def exams_view():
                     flash(f"Exam created, id={exam_id}.")
             elif action == "schedule_paper":
                 if not db.has_full_oversight(staff_no):
-                    flash("Only an executive (Principal/Deputy/Dean) may schedule an exam paper.")
+                    flash("Not allowed.")
                 else:
                     db.schedule_exam_paper(int(request.form["exam_id"]), request.form["subject"],
                                             request.form["date"], request.form.get("start_time"),
@@ -2460,13 +2452,12 @@ def exams_view():
                     flash("Paper scheduled.")
             elif action == "publish_exam":
                 db.publish_exam_results(staff_no, int(request.form["exam_id"]))
-                flash("Results published. Marks for this exam are now locked -- even class teachers "
-                      "cannot edit them until an executive unpublishes.")
+                flash("Results published.")
             elif action == "unpublish_exam":
                 db.unpublish_exam_results(staff_no, int(request.form["exam_id"]))
-                flash("Results unpublished. Class teachers can edit marks for this exam again.")
+                flash("Results unpublished.")
         except (PermissionDenied, NotFound, ValueError) as e:
-            flash(str(e))
+            flash(_err(e))
 
     is_oversight = db.has_full_oversight(staff_no)
     exams = db.conn.execute("SELECT * FROM exams ORDER BY year DESC, term, id").fetchall()
@@ -2521,7 +2512,7 @@ def exams_view():
             </div>
             """
         except (NotFound, ValueError) as e:
-            flash(str(e))
+            flash(_err(e))
 
     db.close()
     rows = "".join(
@@ -2550,9 +2541,6 @@ def exams_view():
     </form>
 
     <h3>Publish / unpublish results</h3>
-    <p style="font-size:12px;color:var(--ink-muted)">Publishing locks marks for that exam completely --
-    even the class teacher can no longer edit them, and parents can see the report card. Unpublish to
-    make corrections, then re-publish when done.</p>
     <form method="post">
       <input type="hidden" name="action" value="publish_exam">
       Exam ID: <input name="exam_id" size="4">
@@ -2564,10 +2552,7 @@ def exams_view():
       <button type="submit">Unpublish results</button>
     </form>
     """ if is_oversight else """
-    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">
-      Creating exams, scheduling papers, and publishing/unpublishing results are available to the
-      Principal, a Deputy Principal, or the Dean of Studies only.
-    </div>
+    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>
     """
     body = f"""
     <table border="1" cellpadding="4"><tr><th>ID</th><th>Name</th><th>Term</th><th>Year</th><th>Category</th><th>Weight</th><th>Status</th></tr>{rows}</table>
@@ -2575,8 +2560,6 @@ def exams_view():
     {creation_section}
 
     <h3>Grade breakdown</h3>
-    <p style="font-size:12px;color:var(--ink-muted)">Per-stream grade distribution for one subject,
-    with each stream's deviation from the form average and who teaches it there.</p>
     <form method="get">
       <input type="hidden" name="gb_go" value="1">
       Form: <input name="gb_form" size="2" value="{gb_form}">
@@ -2602,7 +2585,7 @@ def analytics_view():
 
     if request.method == "POST" and request.form.get("action") == "send_reminder":
         if not oversight:
-            flash("Only an executive may send missing-marks reminders.")
+            flash("Not allowed.")
         else:
             db.send_missing_marks_reminder(request.form["target_staff_no"], request.form["subject"],
                                             request.form["class_code"], int(request.form["missing_count"]))
@@ -2750,8 +2733,8 @@ def performance_chart():
     fig, ax = plt.subplots(figsize=(7, 4))
     x = range(len(subjects))
     width = 0.35
-    ax.bar([i - width / 2 for i in x], scores, width, label="Student", color="#2B3A55")
-    ax.bar([i + width / 2 for i in x], class_avgs, width, label="Class Average", color="#C9A227")
+    ax.bar([i - width / 2 for i in x], scores, width, label="Student", color="#14724B")
+    ax.bar([i + width / 2 for i in x], class_avgs, width, label="Class Average", color="#9BD3B3")
     ax.set_xticks(list(x))
     ax.set_xticklabels(subjects, rotation=30, ha="right")
     ax.set_ylabel("Score (%)")
@@ -2786,7 +2769,7 @@ def messages_view():
             elif action == "mark_read":
                 db.mark_message_read(int(request.form["message_id"]), staff_no)
         except NotFound as e:
-            flash(str(e))
+            flash(_err(e))
 
     tab = request.values.get("tab", "inbox")
     if tab == "sent":
@@ -2848,7 +2831,7 @@ def alumni_view():
                                       phone=request.form.get("phone") or None)
             flash("Contact updated.")
         except NotFound as e:
-            flash(str(e))
+            flash(_err(e))
 
     year = request.args.get("year")
     alumni = db.get_alumni(int(year)) if year else db.get_alumni()
@@ -2915,8 +2898,7 @@ def academic_setup_view():
                 flash("Account " + ("locked." if request.form["locked"] == "1" else "unlocked."))
             elif action == "generate_otp":
                 otp = db.generate_otp_for(request.form["target_staff_no"], staff_no)
-                flash(f"One-time code for {request.form['target_staff_no']}: {otp} "
-                      f"(valid 15 minutes, single use -- enter it at /reset-password)")
+                flash(f"OTP for {request.form['target_staff_no']}: {otp}")
             elif action == "bulk_renumber_students":
                 form_no = request.form.get("form_number") or None
                 mapping = db.bulk_renumber_students(
@@ -2930,7 +2912,7 @@ def academic_setup_view():
                 )
                 flash(f"Renumbered {len(mapping)} staff member(s).")
         except (NotFound, ValueError, PermissionDenied) as e:
-            flash(str(e))
+            flash(_err(e))
 
     subjects = db.list_subjects()
     forms_streams = {
@@ -2990,8 +2972,7 @@ def academic_setup_view():
                 + ("Enabled" if enabled else "Disabled") + "</span>"
                 + form_btn("toggle_feature", {"feature": name, "enabled": "0" if enabled else "1"},
                            "Disable" if enabled else "Enable") + "</div>")
-        content = ("<p class='hint'>Disabling a component hides it from every non-executive account. "
-                   "You can always see and re-enable it.</p><div class='toggle-grid'>" + cards + "</div>")
+        content = ("<div class='toggle-grid'>" + cards + "</div>")
     elif tab == "access":
         acct = "".join(
             "<tr><td class='mono'>" + esc(t["staff_no"]) + "</td><td>" + esc(t["first_name"]) + " " + esc(t["last_name"])
@@ -3006,18 +2987,15 @@ def academic_setup_view():
             "<div class='toggle-card' style='max-width:380px;margin-bottom:18px'><b>System lockout</b>"
             "<span class='state' style='color:" + ("var(--danger)" if system_locked else "green") + "'>"
             + ("LOCKED" if system_locked else "Open") + "</span>"
-            "<p class='hint' style='margin:0'>Blocks every non-executive login (maintenance, holidays, staff "
-            "leave). Executives can still log in to lift it.</p>"
+            ""
             + form_btn("toggle_system_lock", {"locked": "0" if system_locked else "1"},
                        "Unlock system" if system_locked else "Lock system") + "</div>"
-            "<p class='hint'>Lock one person's login, or generate a 15-minute, single-use 6-digit code to read out "
-            "to them (they enter it on the reset page). No password is ever shown.</p>"
+            ""
             "<div class='grid-wrap'><table><thead><tr><th>Staff No</th><th>Name</th><th>Status</th><th></th></tr></thead>"
             "<tbody>" + acct + "</tbody></table></div>")
     else:  # numbering
         content = (
-            "<p class='hint'>Renumbers EVERY existing record in one pass and cascades to everything that "
-            "references it (marks, attendance, fees, ...), so nothing goes stale.</p><div class='split'>"
+            "<div class='split'>"
             "<form method='post'><b>Students</b><input type='hidden' name='action' value='bulk_renumber_students'>"
             "Prefix: <input name='prefix' size='8' value='2027'> Padding: <input name='padding' size='3' value='3'> "
             "Start: <input name='start' size='6' value='1'> Form (blank = all): <input name='form_number' size='2'> "
@@ -3079,7 +3057,7 @@ def audit_log_view():
     db, staff_no = ctx
     if not db.has_full_oversight(staff_no):
         db.close()
-        flash("Only the Principal, a Deputy Principal, or the Dean of Studies may view the audit log.")
+        flash("Not allowed.")
         return redirect(url_for("dashboard"))
     entity = request.args.get("entity") or None
     entity_id = request.args.get("entity_id") or None
@@ -3127,7 +3105,7 @@ def promotion_view():
                 flash(f"Promotion complete: {result}")
                 step2 = False
             except PermissionDenied as e:
-                flash(str(e))
+                flash(_err(e))
     db.close()
 
     if step2 and result is None:
@@ -3210,8 +3188,6 @@ def reports_view():
       Exam ID (optional): <input name="exam_id" size="4">
       <button type="submit">Download PDF</button>
     </form>
-    <p style="font-size:12px;color:var(--ink-muted)">Works for classes you're the class teacher of,
-    or any class in a form you supervise/oversee.</p>
     """
 
     form_merit_section = """
@@ -3221,9 +3197,7 @@ def reports_view():
       <button type="submit">Download PDF</button>
     </form>
     """ if can_form_merit else """
-    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">
-      Form merit lists are available to that form's supervisor, the Dean of Studies, or an executive.
-    </div>
+    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>
     """
 
     school_merit_section = """
@@ -3232,9 +3206,7 @@ def reports_view():
       <button type="submit">Download PDF</button>
     </form>
     """ if can_school_merit else """
-    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">
-      The school-wide merit list is available to the Dean of Studies or an executive.
-    </div>
+    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>
     """
 
     dept_section = """
@@ -3244,9 +3216,7 @@ def reports_view():
       <button type="submit">Download PDF</button>
     </form>
     """ if is_hod_anywhere else """
-    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">
-      Department performance reports are available to that department's HOD or an executive.
-    </div>
+    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>
     """
 
     financial_section = f"""
@@ -3255,9 +3225,7 @@ def reports_view():
       <button type="submit">Download PDF</button>
     </form>
     """ if is_oversight else """
-    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">
-      The financial statement is available to the Principal, a Deputy Principal, or the Dean of Studies.
-    </div>
+    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>
     """
 
     ranking_section = f"""
@@ -3267,9 +3235,7 @@ def reports_view():
       <button type="submit">Download PDF</button>
     </form>
     """ if can_form_merit else """
-    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">
-      Form-wide stream rankings are available to that form's supervisor, the Dean of Studies, or an executive.
-    </div>
+    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>
     """
 
     gender_section = f"""
@@ -3280,9 +3246,7 @@ def reports_view():
       <button type="submit">View</button>
     </form>
     """ if can_form_merit else """
-    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">
-      Gender-stratified merit lists are available to that form's supervisor, the Dean of Studies, or an executive.
-    </div>
+    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>
     """
 
     body = f"""
@@ -3306,7 +3270,7 @@ def form_ranking_pdf():
     form_number = int(request.args["form_number"])
     if not db.can_print_form_merit_list(staff_no, form_number):
         db.close()
-        flash("Only that form's supervisor, the Dean of Studies, or an executive may print this ranking.")
+        flash("Not allowed.")
         return redirect(url_for("reports_view"))
     exam_id = int(request.args["exam_id"])
     tmp = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -3330,7 +3294,7 @@ def class_list_pdf():
                              exam_id=int(exam_id) if exam_id else None)
         return _pdf_response(tmp.name)
     except (PermissionDenied, NotFound) as e:
-        flash(str(e))
+        flash(_err(e))
         return redirect(url_for("reports_view"))
     finally:
         db.close()
@@ -3348,7 +3312,7 @@ def merit_list_pdf():
         ts.print_merit_list(int(request.args["form_number"]), int(request.args["exam_id"]), tmp.name)
         return _pdf_response(tmp.name)
     except PermissionDenied as e:
-        flash(str(e))
+        flash(_err(e))
         return redirect(url_for("reports_view"))
     finally:
         db.close()
@@ -3366,7 +3330,7 @@ def school_merit_list_pdf():
         ts.print_school_merit_list(int(request.args["exam_id"]), tmp.name)
         return _pdf_response(tmp.name)
     except PermissionDenied as e:
-        flash(str(e))
+        flash(_err(e))
         return redirect(url_for("reports_view"))
     finally:
         db.close()
@@ -3384,7 +3348,7 @@ def department_performance_pdf():
         ts.print_department_performance(request.args["department_code"], int(request.args["exam_id"]), tmp.name)
         return _pdf_response(tmp.name)
     except (PermissionDenied, NotFound) as e:
-        flash(str(e))
+        flash(_err(e))
         return redirect(url_for("reports_view"))
     finally:
         db.close()

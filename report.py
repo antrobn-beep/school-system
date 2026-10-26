@@ -65,13 +65,13 @@ def generate_report_card(db: SchoolDB, adm_no: str, exam_id: int, output_path: s
 
     marks_table = Table(rows, colWidths=[70 * mm, 35 * mm, 30 * mm, 35 * mm])
     marks_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b3a55")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#14724b")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 10),
         ("ALIGN", (1, 0), (-1, -1), "CENTER"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f4f6fa")]),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3faf6")]),
     ]))
     story.append(marks_table)
     story.append(Spacer(1, 10))
@@ -83,7 +83,7 @@ def generate_report_card(db: SchoolDB, adm_no: str, exam_id: int, output_path: s
         colWidths=[45 * mm, 45 * mm, 45 * mm],
     )
     totals_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8ebf2")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e3f1e9")),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("ALIGN", (0, 0), (-1, -1), "CENTER"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),

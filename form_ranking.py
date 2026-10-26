@@ -57,17 +57,17 @@ def generate_form_ranking(db: SchoolDB, form_number: int, exam_id: int, output_p
 
     table = Table(rows, colWidths=[16 * mm, 20 * mm, 32 * mm, 55 * mm, 22 * mm, 28 * mm])
     style_cmds = [
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b3a55")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#14724b")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 9.5),
         ("ALIGN", (0, 0), (0, -1), "CENTER"),
         ("ALIGN", (4, 0), (-1, -1), "CENTER"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, supervisor_row_index - 1), [colors.white, colors.HexColor("#f4f6fa")]),
-        ("BACKGROUND", (0, supervisor_row_index), (-1, supervisor_row_index), colors.HexColor("#dfe9ff")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, supervisor_row_index - 1), [colors.white, colors.HexColor("#f3faf6")]),
+        ("BACKGROUND", (0, supervisor_row_index), (-1, supervisor_row_index), colors.HexColor("#dcfce7")),
         ("FONTNAME", (0, supervisor_row_index), (-1, supervisor_row_index), "Helvetica-Bold"),
-        ("LINEABOVE", (0, supervisor_row_index), (-1, supervisor_row_index), 1, colors.HexColor("#2b3a55")),
+        ("LINEABOVE", (0, supervisor_row_index), (-1, supervisor_row_index), 1, colors.HexColor("#14724b")),
     ]
     # Highlight rank #1
     for i, s in enumerate(data["streams"], start=1):

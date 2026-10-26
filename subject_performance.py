@@ -78,17 +78,17 @@ def generate_subject_performance(db: SchoolDB, form_number: int, exam_id: int, o
 
     table = Table(rows, colWidths=col_widths)
     style_cmds = [
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b3a55")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#14724b")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("ALIGN", (1, 0), (-1, -1), "CENTER"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f4f6fa")]),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3faf6")]),
         ("FONTNAME", (-1, 1), (-1, -1), "Helvetica-Bold"),
     ]
     for r_idx, c_idx in best_cells:
-        style_cmds.append(("BACKGROUND", (c_idx, r_idx), (c_idx, r_idx), colors.HexColor("#dfe9ff")))
+        style_cmds.append(("BACKGROUND", (c_idx, r_idx), (c_idx, r_idx), colors.HexColor("#dcfce7")))
         style_cmds.append(("FONTNAME", (c_idx, r_idx), (c_idx, r_idx), "Helvetica-Bold"))
     table.setStyle(TableStyle(style_cmds))
     story.append(table)

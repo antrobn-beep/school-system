@@ -51,17 +51,17 @@ def generate_form_staff_list(db: SchoolDB, form_number: int, output_path: str,
 
     stream_table = Table(rows, colWidths=[25 * mm, 45 * mm, 80 * mm])
     style_cmds = [
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b3a55")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#14724b")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 10),
         ("ALIGN", (0, 0), (0, -1), "CENTER"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f4f6fa")]),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -2), [colors.white, colors.HexColor("#f3faf6")]),
         # highlight the supervisor row so it reads as a different kind of entry
-        ("BACKGROUND", (0, supervisor_row_index), (-1, supervisor_row_index), colors.HexColor("#dfe9ff")),
+        ("BACKGROUND", (0, supervisor_row_index), (-1, supervisor_row_index), colors.HexColor("#dcfce7")),
         ("FONTNAME", (0, supervisor_row_index), (-1, supervisor_row_index), "Helvetica-Bold"),
-        ("LINEABOVE", (0, supervisor_row_index), (-1, supervisor_row_index), 1, colors.HexColor("#2b3a55")),
+        ("LINEABOVE", (0, supervisor_row_index), (-1, supervisor_row_index), 1, colors.HexColor("#14724b")),
     ]
     stream_table.setStyle(TableStyle(style_cmds))
     story.append(stream_table)

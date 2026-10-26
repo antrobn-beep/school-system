@@ -58,7 +58,7 @@ def generate_receipt(db: SchoolDB, payment_id: int, output_path: str,
 
     amount_table = Table([["Amount Paid", f"KES {payment['amount']:,.2f}"]], colWidths=[60 * mm, 60 * mm])
     amount_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#2b3a55")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#14724b")),
         ("TEXTCOLOR", (0, 0), (-1, -1), colors.white),
         ("FONTNAME", (0, 0), (-1, -1), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 13),

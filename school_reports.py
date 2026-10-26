@@ -47,14 +47,14 @@ def generate_school_merit_list(db: SchoolDB, exam_id: int, output_path: str,
 
     table = Table(rows, colWidths=[20 * mm, 25 * mm, 55 * mm, 20 * mm, 20 * mm, 20 * mm, 18 * mm])
     style_cmds = [
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b3a55")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#14724b")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("ALIGN", (0, 0), (0, -1), "CENTER"),
         ("ALIGN", (3, 0), (-1, -1), "CENTER"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f4f6fa")]),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3faf6")]),
     ]
     medals = {1: colors.HexColor("#fff2c2"), 2: colors.HexColor("#eaeaea"), 3: colors.HexColor("#f3ddc4")}
     for e in entries:
@@ -92,13 +92,13 @@ def generate_financial_statement(db: SchoolDB, term: int, year: int, output_path
     ]
     summary_table = Table(summary_rows, colWidths=[70 * mm, 60 * mm])
     summary_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b3a55")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#14724b")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 10),
         ("ALIGN", (1, 0), (-1, -1), "RIGHT"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f4f6fa")]),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3faf6")]),
     ]))
     story.append(summary_table)
 
@@ -113,13 +113,13 @@ def generate_financial_statement(db: SchoolDB, term: int, year: int, output_path
         rows.append(["-", "No outstanding balances.", "-", "-", "-", "-"])
     arrears_table = Table(rows, colWidths=[22 * mm, 42 * mm, 18 * mm, 24 * mm, 24 * mm, 24 * mm])
     arrears_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b3a55")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#14724b")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 8.5),
         ("ALIGN", (3, 0), (-1, -1), "RIGHT"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f4f6fa")]),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3faf6")]),
     ]))
     story.append(arrears_table)
     story.append(Spacer(1, 10))
@@ -161,13 +161,13 @@ def generate_department_performance(db: SchoolDB, department_code: str, exam_id:
         rows.append(["No marks recorded yet.", "-", "-"])
     table = Table(rows, colWidths=[70 * mm, 55 * mm, 35 * mm])
     table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b3a55")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#14724b")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 10),
         ("ALIGN", (1, 0), (-1, -1), "CENTER"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f4f6fa")]),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3faf6")]),
     ]))
     story.append(table)
     story.append(Spacer(1, 10))

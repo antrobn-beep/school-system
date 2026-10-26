@@ -68,18 +68,18 @@ def generate_class_list(db: SchoolDB, form_number: int, stream_name_or_code: str
             ])
         perf_table = Table(rows, colWidths=[25 * mm, 35 * mm, 25 * mm, 30 * mm, 30 * mm])
         style_cmds = [
-            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b3a55")),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#14724b")),
             ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
             ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
             ("FONTSIZE", (0, 0), (-1, -1), 9),
             ("ALIGN", (2, 0), (-1, -1), "CENTER"),
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f4f6fa")]),
+            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3faf6")]),
         ]
         # highlight this class's row
         for i, s in enumerate(perf["streams"], start=1):
             if s["class_code"] == data["class_code"]:
-                style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#dfe9ff")))
+                style_cmds.append(("BACKGROUND", (0, i), (-1, i), colors.HexColor("#dcfce7")))
                 style_cmds.append(("FONTNAME", (0, i), (-1, i), "Helvetica-Bold"))
         perf_table.setStyle(TableStyle(style_cmds))
         story.append(perf_table)
@@ -107,14 +107,14 @@ def generate_class_list(db: SchoolDB, form_number: int, stream_name_or_code: str
 
     roster_table = Table(rows, colWidths=col_widths)
     roster_table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b3a55")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#14724b")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("ALIGN", (0, 0), (0, -1), "CENTER"),
         ("ALIGN", (-1, 0), (-1, -1), "CENTER"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f4f6fa")]),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3faf6")]),
     ]))
     story.append(roster_table)
 

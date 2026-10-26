@@ -1,3 +1,37 @@
+"""
+db.py
+Real (SQLite) persistence layer for the school system -- EduLink core.
+
+Covers everything from before (forms, streams, subjects, teachers, students,
+class teachers, class supervisors) PLUS a marks workflow:
+
+Marks workflow rules
+---------------------
+1. A subject teacher enters a student's mark for an exam -> saved as a DRAFT.
+2. While a mark is a DRAFT, the subject teacher who owns it can keep editing
+   it (corrections before submission).
+3. When the subject teacher SUBMITS a mark (or a whole class's marks), its
+   status flips to SUBMITTED and locks for that teacher.
+4. Once SUBMITTED, only the class teacher of that student's class (i.e. the
+   class teacher of that specific form+stream, e.g. "1W") may edit it.
+   The original subject teacher can no longer edit a submitted mark.
+
+Everything is persisted in a SQLite file (default: school.db), so data
+survives across runs -- this is the "real database" version of the system.
+
+Visibility rules
+-----------------
+A teacher only sees the classes they actually have a role in:
+- Class teacher of "1W"       -> sees everything for class 1W (all subjects, all students).
+- Class supervisor of Form 1  -> sees everything for every stream in Form 1.
+- Subject teacher assigned to teach e.g. Biology in "2G" -> sees ONLY Biology
+  marks for students in 2G. The same teacher may teach Chemistry in a
+  different class ("3R") and would see only Chemistry there.
+
+A teacher must be explicitly assigned (assign_subject_teacher) to a specific
+class before they can enter marks for it -- just "knowing" a subject isn't
+enough, they must be timetabled for that class.
+"""
 
 import sqlite3
 import hashlib
@@ -36,13 +70,16 @@ EXECUTIVE_ROLES = {"principal", "deputy_principal_academics", "deputy_principal_
 
 
 class PermissionDenied(Exception):
+    """Raised when a teacher tries to do something their role doesn't allow."""
 
 
 class AuthError(Exception):
-    
+    """Raised on a failed login (unknown staff number or wrong password)."""
+
 
 class NotFound(Exception):
-   
+    """Raised when a referenced record does not exist."""
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -3153,12 +3190,12 @@ class SchoolDB:
     def parent_login(self, email: str, password: str) -> int:
         row = self.conn.execute("SELECT * FROM parents WHERE email=?", (email.strip().lower(),)).fetchone()
         if row is None or not row["password_hash"]:
-            raise AuthError("Invalid email or password.")
+            raise AuthError("Invalid username or password.")
         candidate = hashlib.pbkdf2_hmac(
             "sha256", password.encode(), bytes.fromhex(row["password_salt"]), 100_000
         ).hex()
         if not secrets.compare_digest(candidate, row["password_hash"]):
-            raise AuthError("Invalid email or password.")
+            raise AuthError("Invalid username or password.")
         return row["id"]
 
     def parent_children(self, parent_id: int) -> List[sqlite3.Row]:

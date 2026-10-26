@@ -50,14 +50,14 @@ def generate_merit_list(db: SchoolDB, form_number: int, exam_id: int, output_pat
 
     table = Table(rows, colWidths=[20 * mm, 25 * mm, 60 * mm, 20 * mm, 20 * mm, 20 * mm, 18 * mm])
     style_cmds = [
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#2b3a55")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#14724b")),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("ALIGN", (0, 0), (0, -1), "CENTER"),
         ("ALIGN", (3, 0), (-1, -1), "CENTER"),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#bbbbbb")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f4f6fa")]),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f3faf6")]),
     ]
     # Highlight top 3 positions
     medal_colors = {1: colors.HexColor("#fff2c2"), 2: colors.HexColor("#eaeaea"), 3: colors.HexColor("#f3ddc4")}
