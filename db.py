@@ -475,6 +475,7 @@ class SchoolDB:
             ("students", "gender TEXT"),
             ("expenses", "receipt_path TEXT"),
             ("teachers", "account_locked INTEGER DEFAULT 0"),
+            ("teachers", "registered_at TEXT"),
         ]
         for table, coldef in migrations:
             try:
@@ -494,6 +495,7 @@ class SchoolDB:
             )
             """
         )
+        self.conn.execute("UPDATE teachers SET registered_at=? WHERE registered_at IS NULL AND force_password_reset=0", (_now(),))
         self.conn.commit()
 
     def _seed_defaults(self):
@@ -670,6 +672,18 @@ class SchoolDB:
             (identifier, identifier.strip().lower()),
         ).fetchone()
         return row["staff_no"] if row else None
+
+    def needs_registration(self, staff_no: str) -> bool:
+        """True for a brand-new account that has not yet completed first-login registration."""
+        row = self.conn.execute(
+            "SELECT force_password_reset, registered_at FROM teachers WHERE staff_no=?", (staff_no,)).fetchone()
+        return bool(row and row["force_password_reset"] and not row["registered_at"])
+
+    def complete_registration(self, staff_no: str, password: str):
+        self.set_password(staff_no, password, force_reset=False)
+        self.conn.execute("UPDATE teachers SET registered_at=? WHERE staff_no=?", (_now(), staff_no))
+        self.conn.commit()
+        self._audit("teachers", staff_no, "registration_completed", staff_no, "")
 
     def set_password(self, staff_no: str, password: str, force_reset: bool = False):
         self._require_teacher(staff_no)

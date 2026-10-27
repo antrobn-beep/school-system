@@ -17,7 +17,12 @@ Then open http://localhost:5000
 
 import os
 from datetime import datetime, timedelta
-from html import escape as esc
+from html import escape as _html_escape
+
+
+def esc(value):
+    """HTML-escape, and neutralise template braces so a name can never be run as a template."""
+    return _html_escape(str(value), quote=True).replace("{", "&#123;").replace("}", "&#125;")
 import tempfile
 from flask import Flask, request, session, redirect, url_for, render_template_string, send_file, flash
 
@@ -315,6 +320,46 @@ STYLE = """
   .panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); }
   .pick { display: flex; gap: 10px; padding: 12px 14px; }
   .pick select { min-width: 230px; padding: 9px 12px; font-size: 14px; }
+  /* ---- registration menu (USSD style) ---- */
+  .ussd { border-radius: 16px; background: #fff; border: 1px solid var(--border); overflow: hidden; margin-top: 8px;
+    box-shadow: 0 14px 40px rgba(14,74,51,.18); padding: 0 !important; }
+  .ussd-head { background: linear-gradient(120deg, #0B3D2A, #14724B 60%, #1FA06A); color: #fff; padding: 13px 20px;
+    font-weight: 700; font-size: 15px; letter-spacing: .02em; }
+  .ussd-body { padding: 22px 22px 14px; line-height: 1.8; font-size: 15px; color: var(--ink); }
+  .ussd-body .opt { color: #14724B; font-weight: 800; margin-right: 4px; }
+  .ussd-in { display: block; width: 100%; margin: 8px 0 16px; padding: 11px 0 !important; border: none !important;
+    border-bottom: 2px solid #14724B !important; border-radius: 0 !important; box-shadow: none !important;
+    font-size: 17px; letter-spacing: .08em; background: transparent !important; }
+  .ussd-in:focus { outline: none; border-bottom-color: #1FA06A !important; }
+  .ussd-in.bad { border-bottom-color: #B3261E !important; }
+  .js #step2 { display: none; } .js.step2 #step2 { display: block; } .js.step2 #step1 { display: none; }
+  .js #sendbtn { display: none; } .js.step2 #sendbtn { display: block; } .js.step2 #nextbtn { display: none; }
+  html:not(.js) #nextbtn { display: none; }
+  .steps { display: flex; gap: 8px; justify-content: center; margin: 4px 0 6px; }
+  .steps i { width: 8px; height: 8px; border-radius: 50%; background: #CFE3D6; transition: background .2s; }
+  .steps i.on { background: #14724B; }
+  .ussd-actions { display: flex; border-top: 1px solid var(--border); }
+  .ussd-btn { flex: 1; text-align: center; padding: 15px 8px; font-weight: 800; font-size: 15px; color: #14724B !important;
+    background: none !important; border: none; border-radius: 0 !important; cursor: pointer; text-decoration: none !important;
+    box-shadow: none !important; }
+  .ussd-btn + .ussd-btn { border-left: 1px solid var(--border); }
+  .ussd-btn:hover { background: #EAF6EF !important; }
+  .reg-done { text-align: center; padding: 34px 22px 38px; }
+  .tick { width: 74px; height: 74px; display: block; margin: 0 auto 14px; }
+  .tick-c { fill: #E3F5EA; stroke: #1FA06A; stroke-width: 2.5; stroke-dasharray: 151; stroke-dashoffset: 151;
+    animation: draw .6s ease forwards; }
+  .tick-p { fill: none; stroke: #14724B; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round;
+    stroke-dasharray: 40; stroke-dashoffset: 40; animation: draw .4s .5s ease forwards; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  .reg-ok { font-weight: 800; font-size: 19px; color: #0E4A33; margin-bottom: 8px; animation: rise .5s .7s both; }
+  .reg-wait { color: var(--ink-muted); font-size: 15px; animation: rise .5s 1s both; }
+  .dots::after { content: ""; animation: dots 1.2s steps(4) infinite; }
+  @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .loader { height: 5px; border-radius: 5px; background: #DDEFE4; margin: 26px auto 0; width: 70%; overflow: hidden; }
+  .loader span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, #14724B, #1FA06A);
+    animation: load 3.6s 1.1s ease-in-out forwards; }
+  @keyframes load { to { width: 100%; } }
   .app-badge { position: absolute; top: 12px; right: 12px; background: var(--danger); color: #fff; font-size: 11px;
     font-weight: 700; border-radius: 20px; padding: 2px 8px; }
 </style>
@@ -453,6 +498,8 @@ def login_view():
             session.permanent = bool(request.form.get("remember"))
             if sess.must_reset_password:
                 session["must_reset_password"] = True
+                if db.needs_registration(sess.staff_no):
+                    return redirect(url_for("registration_view"))
                 return redirect(url_for("change_password_view"))
             return redirect(url_for("dashboard"))
         except AuthError as e:
@@ -503,6 +550,67 @@ def change_password_view():
     </form>
     """
     return page("Change Password", body, nav=False)
+
+
+@app.route("/registration", methods=["GET", "POST"])
+def registration_view():
+    """First login of a new account: a USSD-style menu, then 'registration completed'."""
+    if "staff_no" not in session or not session.get("must_reset_password"):
+        return redirect(url_for("login_view"))
+    db = get_db()
+    try:
+        staff_no = session["staff_no"]
+        if not db.needs_registration(staff_no):
+            return redirect(url_for("change_password_view"))
+        me = db.conn.execute("SELECT first_name, last_name FROM teachers WHERE staff_no=?", (staff_no,)).fetchone()
+        name = f"{me['first_name']} {me['last_name']}" if me else staff_no
+
+        if request.method == "POST":
+            pw, confirm = request.form.get("new_password", ""), request.form.get("confirm_password", "")
+            if len(pw) < 6:
+                flash("Password must be at least 6 characters.")
+            elif pw != confirm:
+                flash("Passwords do not match.")
+            else:
+                db.complete_registration(staff_no, pw)
+                session.pop("must_reset_password", None)
+                done = (
+                    "<div class='ussd'><div class='ussd-head'>EduLink</div><div class='ussd-body reg-done'>"
+                    "<svg class='tick' viewBox='0 0 52 52'><circle class='tick-c' cx='26' cy='26' r='24'/>"
+                    "<path class='tick-p' d='M14 27l8 8 16-17'/></svg>"
+                    "<div class='reg-ok'>Registration completed successfully.</div>"
+                    "<div class='reg-wait'>Please wait for the menu<span class='dots'></span></div>"
+                    "<div class='loader'><span></span></div></div></div>"
+                    "<script>setTimeout(function(){location.href='" + url_for("dashboard") + "'},3800)</script>"
+                    "<noscript><meta http-equiv='refresh' content='4;url=" + url_for("dashboard") + "'></noscript>"
+                )
+                return page("Registration", done, nav=False)
+
+        body = (
+            "<form method='post' id='regform' class='ussd' autocomplete='off'>"
+            "<div class='ussd-head'>EduLink &middot; Registration</div>"
+            "<div class='ussd-body'>"
+            f"Welcome <b>{esc(name)}</b>.<br>Username: <b>{esc(staff_no)}</b><br><br>"
+            "<div id='step1'><span class='opt'>1.</span> Create your password"
+            "<input class='ussd-in' type='password' name='new_password' id='p1' placeholder='Enter password' "
+            "autocomplete='new-password' required></div>"
+            "<div id='step2'><span class='opt'>2.</span> Confirm your password"
+            "<input class='ussd-in' type='password' name='confirm_password' id='p2' placeholder='Re-enter password' "
+            "autocomplete='new-password'></div>"
+            "<div class='steps'><i id='d1' class='on'></i><i id='d2'></i></div>"
+            "</div>"
+            "<div class='ussd-actions'><a href='" + url_for("logout") + "' class='ussd-btn'>Cancel</a>"
+            "<button type='button' class='ussd-btn' id='nextbtn'>Next</button>"
+            "<button type='submit' class='ussd-btn' id='sendbtn'>Send</button></div></form>"
+            "<script>(function(){var h=document.documentElement;h.classList.add('js');"
+            "var p1=document.getElementById('p1'),p2=document.getElementById('p2');"
+            "document.getElementById('nextbtn').onclick=function(){if(p1.value.length<6){p1.focus();p1.classList.add('bad');return}"
+            "h.classList.add('step2');document.getElementById('d2').className='on';p2.required=true;p2.focus()};"
+            "p1.onkeydown=function(e){if(e.key==='Enter'){e.preventDefault();document.getElementById('nextbtn').click()}}})()</script>"
+        )
+        return page("Registration", body, nav=False)
+    finally:
+        db.close()
 
 
 @app.route("/forgot-password", methods=["GET", "POST"])
