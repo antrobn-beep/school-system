@@ -666,7 +666,7 @@ class SchoolDB:
         Use this for accounts created by an admin without the teacher present
         (e.g. Dean of Studies onboarding a new teacher)."""
         self._require_teacher(staff_no)
-        temp_password = secrets.token_urlsafe(9)  # e.g. 'kQ3f7z-Xp2mN1w'
+        temp_password = f"{secrets.randbelow(1_000_000):06d}"  # a 6-digit code, same style as the OTP
         self.set_password(staff_no, temp_password, force_reset=True)
         return temp_password
 
@@ -3246,7 +3246,7 @@ class SchoolDB:
             (parts[0], parts[1] if len(parts) > 1 else "", username))
         parent_id = cur.lastrowid
         self.conn.commit()
-        temp = secrets.token_urlsafe(6)
+        temp = f"{secrets.randbelow(1_000_000):06d}"  # a 6-digit code, same style as the OTP
         self.set_parent_password(parent_id, temp)
         self.link_parent_to_student(parent_id, username)
         self._audit("parents", username, "create", requested_by, "")

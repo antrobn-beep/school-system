@@ -16,7 +16,9 @@ Then open http://localhost:5000
 """
 
 import os
+import re
 import time
+import secrets as _secrets
 from datetime import datetime, timedelta
 from html import escape as _html_escape
 
@@ -440,9 +442,18 @@ NAV = """
 """
 
 
+
+def _add_csrf(html, token):
+    """Injects a hidden csrf_token field right after every <form ...method=post...> tag."""
+    field = f'<input type="hidden" name="csrf_token" value="{token}">'
+    return re.sub(r'(<form\b[^>]*\bmethod=["\']?post["\']?[^>]*>)',
+                  lambda m: m.group(1) + field, html, flags=re.I)
+
 def page(title, body, nav=True):
     if not nav:
         # auth screens (login, forgot password, change password) get the centered card treatment
+        token = session.get("csrf", "")
+        body = _add_csrf(body, token)
         template = f"""<!doctype html><html><head><title>EduLink &mdash; {title}</title>{STYLE}</head>
         <body><div class="auth-wrap"><div class="auth-card">
         <div class="brand-row"><div class="brand-mark">EL</div>EduLink</div>
@@ -469,6 +480,7 @@ def page(title, body, nav=True):
         finally:
             db.close()
 
+    body = _add_csrf(body, session.get("csrf", ""))
     template = f"""<!doctype html><html><head><title>EduLink &mdash; {title}</title>{STYLE}</head>
     <body><div class="app-shell">
       <main class="main">
@@ -495,7 +507,25 @@ def page(title, body, nav=True):
           {body}
         </div>
       </main>
-    </div></body></html>"""
+    </div>
+    <script>
+    (function(){{
+      var key = "scrollY:" + location.pathname;
+      document.addEventListener("submit", function(e){{
+        if (e.target && e.target.tagName === "FORM") {{
+          try {{ sessionStorage.setItem(key, String(window.scrollY)); }} catch (err) {{}}
+        }}
+      }}, true);
+      try {{
+        var y = sessionStorage.getItem(key);
+        if (y !== null) {{
+          sessionStorage.removeItem(key);
+          window.scrollTo(0, parseInt(y, 10) || 0);
+        }}
+      }} catch (err) {{}}
+    }})();
+    </script>
+    </body></html>"""
     return render_template_string(template, oversight_flag=oversight_flag,
                                    staffing_flag=staffing_flag, hod_flag=hod_flag)
 
@@ -533,6 +563,7 @@ def login_view():
                 return redirect(url_for("login_view"))
             session["staff_no"] = sess.staff_no
             session.permanent = bool(request.form.get("remember"))
+            session["csrf"] = _secrets.token_hex(16)
             if sess.must_reset_password:
                 session["must_reset_password"] = True
                 if db.needs_registration(sess.staff_no):
@@ -757,6 +788,12 @@ _ENDPOINT_TO_FEATURE_NAME = {endpoint: endpoint.replace("_view", "") for endpoin
 
 @app.before_request
 def _enforce_system_controls():
+    if request.method == "POST" and request.endpoint not in ("login_view", "parent_login_view"):
+        if not session.get("csrf") or request.form.get("csrf_token") != session.get("csrf"):
+            flash("Your session expired. Please try again.")
+            return redirect(request.referrer or url_for("dashboard"))
+    if ("staff_no" in session or "parent_id" in session) and not session.get("csrf"):
+        session["csrf"] = _secrets.token_hex(16)
     """Centrally enforces: (1) a disabled component is unreachable by anyone
     non-executive even via a direct URL, not just hidden from nav, and (2) an
     existing session for a now-locked account or a now-locked system is cut
@@ -819,6 +856,7 @@ def parent_login_view():
             _clear_failures(key)
             session["parent_id"] = parent_id
             session.permanent = bool(request.form.get("remember"))
+            session["csrf"] = _secrets.token_hex(16)
             if db.parent_needs_registration(parent_id):
                 session["parent_must_register"] = True
                 return redirect(url_for("parent_registration_view"))
