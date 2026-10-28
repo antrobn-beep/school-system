@@ -2534,6 +2534,161 @@ def fees_view():
         for e in expenses
     )
 
+    tab_defs = [("overview", "Overview"), ("payments", "Payments"), ("billing", "Billing"), ("expenses", "Expenses")]
+    tab = request.values.get("tab", "overview")
+    if tab not in [k for k, _ in tab_defs]:
+        tab = "overview"
+
+    if tab == "overview":
+        content = f"""
+        <form method="get" action="?tab=overview">
+          Term: <input name="term" size="2" value="{term}"> Year: <input name="year" size="4" value="{year}">
+          <button type="submit">View</button>
+        </form>
+        {stat_cards(summary)}
+        <a href="{url_for('financial_statement_pdf')}?term={term}&year={year}"
+           style="display:inline-block;background:var(--navy);color:#fff;padding:8px 16px;border-radius:7px;
+           text-decoration:none;font-weight:600;font-size:13px;margin:4px 0 20px">
+           Download audit-ready financial statement (PDF)</a>
+
+        <h3>Arrears &amp; pledges ({len(arrears)} students owing)</h3>
+        <div class="grid-wrap"><table><thead><tr><th>Adm No</th><th>Name</th><th>Class</th><th>Billed</th><th>Paid</th>
+            <th>Balance</th><th>Pledged</th><th>Unpledged</th></tr></thead><tbody>{balance_rows}</tbody></table></div>
+
+        <h3>Record a pledge</h3>
+        <form method="post" action="?tab=overview">
+          <input type="hidden" name="action" value="add_pledge">
+          Adm No: <input name="adm_no"> Amount: <input name="amount" size="8">
+          Expected date: <input name="expected_date" placeholder="2026-02-01"> Notes: <input name="notes" size="24">
+          <button type="submit">Record pledge</button>
+        </form>
+        """
+    elif tab == "payments":
+        content = f"""
+        <h3>Payment channels</h3>
+        <table border="1" cellpadding="4"><tr><th>Code</th><th>Name</th><th>Kind</th></tr>{channel_rows}</table>
+        <form method="post" action="?tab=payments">
+          <input type="hidden" name="action" value="add_channel">
+          Code: <input name="code" size="8" placeholder="EQTY"> Name: <input name="name" placeholder="Equity Bank">
+          Kind: <select name="kind"><option>bank</option><option>paybill</option><option>till</option></select>
+          <button type="submit">Add channel</button>
+        </form>
+
+        <h3>Simulate an incoming payment</h3>
+        <form method="post" action="?tab=payments">
+          <input type="hidden" name="action" value="simulate_payment">
+          Channel code: <input name="channel_code" size="8"> Reference: <input name="reference" size="14">
+          Adm No: <input name="adm_no"> Amount: <input name="amount" size="8">
+          Date: <input name="date" placeholder="2026-01-15"> Term: <input name="term" size="2" value="{term}">
+          Year: <input name="year" size="4" value="{year}">
+          <button type="submit">Simulate payment received</button>
+        </form>
+        """
+    elif tab == "billing":
+        content = """
+        <h3>Set fee structure</h3>
+        <form method="post" action="?tab=billing">
+          <input type="hidden" name="action" value="set_structure">
+          Form: <input name="form_number" size="2" value="1"> Term: <input name="term" size="2" value="1">
+          Year: <input name="year" size="4" value="2026"> Amount: <input name="amount" size="8" value="45000">
+          <button type="submit">Set</button>
+        </form>
+
+        <h3>Generate invoices for a form</h3>
+        <form method="post" action="?tab=billing">
+          <input type="hidden" name="action" value="generate_invoices">
+          Form: <input name="form_number" size="2" value="1"> Term: <input name="term" size="2" value="1">
+          Year: <input name="year" size="4" value="2026">
+          <button type="submit">Generate</button>
+        </form>
+        """
+    else:  # expenses
+        content = f"""
+        <h3>Record an expense</h3>
+        <form method="post" action="?tab=expenses" enctype="multipart/form-data">
+          <input type="hidden" name="action" value="add_expense">
+          Category: <input name="category"> Amount: <input name="amount" size="8">
+          Date: <input name="date" placeholder="2026-01-20"> Description: <input name="description" size="30">
+          Receipt (optional): <input type="file" name="receipt_file">
+          <button type="submit">Record</button>
+        </form>
+
+        <h3>Expense ledger ({year})</h3>
+        <div class="grid-wrap"><table><thead><tr><th>Date</th><th>Category</th><th>Amount</th><th>Description</th>
+            <th>Receipt</th></tr></thead><tbody>{expense_rows or "<tr><td colspan='5'>No expenses recorded yet.</td></tr>"}</tbody></table></div>
+        """
+
+    bar = "<div class='tabs'>" + "".join(
+        "<a href='?tab=" + k + "' class='" + ("active" if k == tab else "") + "'>" + v + "</a>"
+        for k, v in tab_defs) + "</div>"
+    return page("Fees", bar + content)
+
+
+    if request.method == "POST":
+        action = request.form.get("action")
+        try:
+            if action == "set_structure":
+                db.set_fee_structure(int(request.form["form_number"]), int(request.form["term"]),
+                                      int(request.form["year"]), float(request.form["amount"]))
+                flash("Fee structure set.")
+            elif action == "generate_invoices":
+                n = db.generate_invoices_for_form(int(request.form["form_number"]), int(request.form["term"]),
+                                                   int(request.form["year"]))
+                flash(f"Generated {n} invoices.")
+            elif action == "add_expense":
+                receipt_path = None
+                file = request.files.get("receipt_file")
+                if file and file.filename:
+                    import uuid
+                    safe_name = f"{uuid.uuid4().hex}_{os.path.basename(file.filename)}"
+                    file.save(os.path.join(UPLOAD_DIR, safe_name))
+                    receipt_path = safe_name
+                db.add_expense(request.form["category"], float(request.form["amount"]), request.form["date"],
+                                request.form.get("description", ""), recorded_by=staff_no,
+                                receipt_path=receipt_path)
+                flash("Expense recorded" + (" with receipt." if receipt_path else "."))
+            elif action == "add_channel":
+                db.add_payment_channel(request.form["code"], request.form["name"], request.form.get("kind", "bank"))
+                flash("Payment channel added.")
+            elif action == "simulate_payment":
+                result = db.record_payment_via_channel(
+                    request.form["channel_code"], request.form["reference"], request.form["adm_no"],
+                    float(request.form["amount"]), request.form["date"],
+                    int(request.form["term"]), int(request.form["year"]),
+                )
+                if result["status"] == "duplicate_ignored":
+                    flash("Already recorded.")
+                else:
+                    flash(f"Recorded. Balance: {result['balance']}")
+            elif action == "add_pledge":
+                db.add_pledge(request.form["adm_no"], float(request.form["amount"]),
+                              request.form.get("expected_date") or None, request.form.get("notes", ""))
+                flash("Pledge recorded.")
+        except (PermissionDenied, NotFound, ValueError) as e:
+            flash(_err(e))
+
+    term = request.values.get("term", "1")
+    year = request.values.get("year", "2026")
+    summary = db.financial_summary(int(term), int(year))
+    arrears = db.arrears_report(int(term), int(year))
+    channels = db.list_payment_channels()
+    expenses = db.list_expenses(int(year))
+    db.close()
+
+    balance_rows = "".join(
+        f"<tr><td class='mono'>{o['adm_no']}</td><td>{o['name']}</td><td>{o['class_code']}</td>"
+        f"<td>{o['billed']}</td><td>{o['paid']}</td><td>{o['balance']}</td>"
+        f"<td>{o['pledged']}</td><td>{o['unpledged_balance']}</td></tr>"
+        for o in arrears
+    )
+    channel_rows = "".join(f"<tr><td class='mono'>{c['code']}</td><td>{c['name']}</td><td>{c['kind']}</td></tr>"
+                            for c in channels)
+    expense_rows = "".join(
+        f"<tr><td>{e['date']}</td><td>{e['category']}</td><td>{e['amount']}</td><td>{e['description'] or ''}</td>"
+        f"<td>{'<a href=' + chr(39) + url_for('receipt_file', filename=e['receipt_path']) + chr(39) + '>View</a>' if e['receipt_path'] else '-'}</td></tr>"
+        for e in expenses
+    )
+
     body = f"""
     <h3>Financial summary</h3>
     <form method="get">
