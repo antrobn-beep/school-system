@@ -476,6 +476,9 @@ class SchoolDB:
             ("expenses", "receipt_path TEXT"),
             ("teachers", "account_locked INTEGER DEFAULT 0"),
             ("teachers", "registered_at TEXT"),
+            ("parents", "username TEXT"),
+            ("parents", "force_password_reset INTEGER DEFAULT 0"),
+            ("parents", "registered_at TEXT"),
         ]
         for table, coldef in migrations:
             try:
@@ -496,6 +499,8 @@ class SchoolDB:
             """
         )
         self.conn.execute("UPDATE teachers SET registered_at=? WHERE registered_at IS NULL AND force_password_reset=0", (_now(),))
+        self.conn.execute("UPDATE parents SET registered_at=? WHERE registered_at IS NULL AND force_password_reset=0", (_now(),))
+        self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_parents_username ON parents(username COLLATE NOCASE)")
         self.conn.commit()
 
     def _seed_defaults(self):
@@ -1416,7 +1421,7 @@ class SchoolDB:
     TOGGLEABLE_FEATURES = [
         "students", "staff", "departments", "marks", "attendance", "timetable",
         "calendar", "fees", "exams", "analytics", "messages", "alumni",
-        "academic_setup", "notifications", "reports",
+        "academic_setup", "notifications", "reports", "parents",
     ]
 
     def is_feature_enabled(self, name: str) -> bool:
@@ -1524,6 +1529,10 @@ class SchoolDB:
             for table, col in referencing:
                 self.conn.execute(f"UPDATE {table} SET {col}=? WHERE {col}=?", (new_no, temp))
             mapping[s["adm_no"]] = new_no
+        for old_no in mapping:
+            self.conn.execute("UPDATE parents SET username=? WHERE username=? COLLATE NOCASE", ("__tmp__" + old_no, old_no))
+        for old_no, new_no in mapping.items():
+            self.conn.execute("UPDATE parents SET username=? WHERE username=?", (new_no, "__tmp__" + old_no))
         self.conn.commit()
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.set_setting("admission_next", str(n))
@@ -3196,13 +3205,18 @@ class SchoolDB:
             self.set_password(row["account_id"], new_password, force_reset=False)
         else:
             self.set_parent_password(int(row["account_id"]), new_password)
+            self.conn.execute("UPDATE parents SET force_password_reset=0, registered_at=COALESCE(registered_at, ?) WHERE id=?",
+                              (_now(), int(row["account_id"])))
 
         self.conn.execute("UPDATE password_resets SET used=1 WHERE id=?", (row["id"],))
         self.conn.commit()
         self._audit(row["account_type"], row["account_id"], "password_reset_completed", "self-service", "")
+        return row["account_type"]
 
-    def parent_login(self, email: str, password: str) -> int:
-        row = self.conn.execute("SELECT * FROM parents WHERE email=?", (email.strip().lower(),)).fetchone()
+    def parent_login(self, identifier: str, password: str) -> int:
+        ident = identifier.strip()
+        row = self.conn.execute(
+            "SELECT * FROM parents WHERE username=? COLLATE NOCASE OR email=?", (ident, ident.lower())).fetchone()
         if row is None or not row["password_hash"]:
             raise AuthError("Invalid username or password.")
         candidate = hashlib.pbkdf2_hmac(
@@ -3211,6 +3225,75 @@ class SchoolDB:
         if not secrets.compare_digest(candidate, row["password_hash"]):
             raise AuthError("Invalid username or password.")
         return row["id"]
+
+    # ---- parent accounts: the username is the student's admission number ----
+    def create_parent_account(self, adm_no: str, guardian_name: str, requested_by: str):
+        """Creates the parent login for one student (username = admission number) with a
+        temporary password. Returns (parent_id, username, temp_password)."""
+        if not self.has_full_oversight(requested_by):
+            raise PermissionDenied(f"Teacher {requested_by} may not create parent accounts -- only an executive can.")
+        student = self.conn.execute("SELECT adm_no FROM students WHERE adm_no=? COLLATE NOCASE", (adm_no.strip(),)).fetchone()
+        if not student:
+            raise NotFound(f"No such student '{adm_no}'.")
+        username = student["adm_no"]
+        if self.conn.execute("SELECT 1 FROM parents WHERE username=? COLLATE NOCASE", (username,)).fetchone():
+            raise ValueError("This student already has a parent account.")
+        parts = guardian_name.strip().split(None, 1)
+        if not parts:
+            raise ValueError("Enter the parent's name.")
+        cur = self.conn.execute(
+            "INSERT INTO parents(first_name, last_name, username, force_password_reset) VALUES (?,?,?,1)",
+            (parts[0], parts[1] if len(parts) > 1 else "", username))
+        parent_id = cur.lastrowid
+        self.conn.commit()
+        temp = secrets.token_urlsafe(6)
+        self.set_parent_password(parent_id, temp)
+        self.link_parent_to_student(parent_id, username)
+        self._audit("parents", username, "create", requested_by, "")
+        return parent_id, username, temp
+
+    def parent_needs_registration(self, parent_id: int) -> bool:
+        row = self.conn.execute("SELECT force_password_reset, registered_at FROM parents WHERE id=?", (parent_id,)).fetchone()
+        return bool(row and row["force_password_reset"] and not row["registered_at"])
+
+    def complete_parent_registration(self, parent_id: int, password: str):
+        self.set_parent_password(parent_id, password)
+        self.conn.execute("UPDATE parents SET force_password_reset=0, registered_at=? WHERE id=?", (_now(), parent_id))
+        self.conn.commit()
+        self._audit("parents", str(parent_id), "registration_completed", "self", "")
+
+    def list_parents(self) -> List[Dict[str, Any]]:
+        out = []
+        for p in self.conn.execute("SELECT * FROM parents ORDER BY COALESCE(username, email)").fetchall():
+            kids = [r["student_adm_no"] for r in self.conn.execute(
+                "SELECT student_adm_no FROM parent_students WHERE parent_id=? ORDER BY student_adm_no", (p["id"],))]
+            out.append({"id": p["id"], "username": p["username"] or p["email"] or "-",
+                        "name": f"{p['first_name']} {p['last_name']}".strip(),
+                        "students": kids, "registered": bool(p["registered_at"])})
+        return out
+
+    def remove_parent(self, parent_id: int, requested_by: str):
+        if not self.has_full_oversight(requested_by):
+            raise PermissionDenied(f"Teacher {requested_by} may not remove parent accounts -- only an executive can.")
+        self.conn.execute("DELETE FROM parent_students WHERE parent_id=?", (parent_id,))
+        self.conn.execute("DELETE FROM password_resets WHERE account_type='parent' AND account_id=?", (str(parent_id),))
+        self.conn.execute("DELETE FROM parents WHERE id=?", (parent_id,))
+        self.conn.commit()
+        self._audit("parents", str(parent_id), "remove", requested_by, "")
+
+    def generate_parent_otp(self, parent_id: int, requested_by: str) -> str:
+        """A fresh 15-minute, single-use 6-digit code for a parent who lost their password."""
+        if not self.has_full_oversight(requested_by):
+            raise PermissionDenied(f"Teacher {requested_by} may not generate a recovery OTP -- only an executive can.")
+        if not self.conn.execute("SELECT 1 FROM parents WHERE id=?", (parent_id,)).fetchone():
+            raise NotFound("No such parent account.")
+        otp = f"{secrets.randbelow(1_000_000):06d}"
+        self.conn.execute(
+            "INSERT INTO password_resets(account_type, account_id, token_hash, expires_at, created_at) VALUES ('parent',?,?,?,?)",
+            (str(parent_id), hashlib.sha256(otp.encode()).hexdigest(),
+             (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(timespec="seconds"), _now()))
+        self.conn.commit()
+        return otp
 
     def parent_children(self, parent_id: int) -> List[sqlite3.Row]:
         return self.conn.execute(

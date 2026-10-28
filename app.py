@@ -16,6 +16,7 @@ Then open http://localhost:5000
 """
 
 import os
+import time
 from datetime import datetime, timedelta
 from html import escape as _html_escape
 
@@ -51,6 +52,36 @@ os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
 def _err(e):
     """Keep messages short: a refusal just says so; other errors say what is wrong."""
     return "Not allowed." if isinstance(e, PermissionDenied) else str(e)
+
+
+_FAILS = {}   # "ip|username" -> (consecutive failures, locked_until)
+
+
+def _throttle_key(identifier):
+    return f"{request.remote_addr}|{identifier.strip().lower()}"
+
+
+def _is_throttled(key):
+    rec = _FAILS.get(key)
+    return bool(rec and rec[1] > time.time())
+
+
+def _record_failure(key):
+    now = time.time()
+    count, locked = _FAILS.get(key, (0, 0))
+    if locked and locked < now:
+        count, locked = 0, 0
+    count += 1
+    if count >= 5:
+        count, locked = 0, now + 600
+    _FAILS[key] = (count, locked)
+    if len(_FAILS) > 5000:
+        for k in [k for k, (c, l) in _FAILS.items() if l < now and c == 0]:
+            _FAILS.pop(k, None)
+
+
+def _clear_failures(key):
+    _FAILS.pop(key, None)
 
 
 def get_db():
@@ -379,6 +410,7 @@ NAV_ITEMS = [
     ("analytics_view", "Analytics", "AN", "all"),
     ("messages_view", "Messages", "MS", "all"),
     ("alumni_view", "Alumni", "AL", "oversight"),
+    ("parents_view", "Parents", "PA", "oversight"),
     ("academic_setup_view", "Academic Setup", "AS", "oversight"),
     ("notifications_view", "Notifications", "NO", "all"),
     ("audit_log_view", "Audit Log", "AU", "oversight"),
@@ -486,11 +518,16 @@ def login_view():
             LOCK_MSG = "Error, please try again later"
             # Locked accounts get the same generic error whether or not the password is right,
             # so the lock never reveals that a password was correct.
+            key = _throttle_key(identifier)
+            if _is_throttled(key):
+                flash(LOCK_MSG)
+                return redirect(url_for("login_view"))
             target = db._resolve_login_identifier(identifier)
             if target and db.is_account_locked(target) and not db.has_full_oversight(target):
                 flash(LOCK_MSG)
                 return redirect(url_for("login_view"))
             sess = db_login(db, identifier, password)
+            _clear_failures(key)
             if db.is_system_locked() and not db.has_full_oversight(sess.staff_no):
                 flash(LOCK_MSG)
                 return redirect(url_for("login_view"))
@@ -503,6 +540,7 @@ def login_view():
                 return redirect(url_for("change_password_view"))
             return redirect(url_for("dashboard"))
         except AuthError as e:
+            _record_failure(_throttle_key(identifier))
             flash(_err(e))
         finally:
             db.close()
@@ -552,9 +590,55 @@ def change_password_view():
     return page("Change Password", body, nav=False)
 
 
+def _registration_form(name, username, cancel_url):
+    return (
+        "<form method='post' id='regform' class='ussd' autocomplete='off'>"
+        "<div class='ussd-head'>EduLink &middot; Registration</div>"
+        "<div class='ussd-body'>"
+        f"Welcome <b>{esc(name)}</b>.<br>Username: <b>{esc(username)}</b><br><br>"
+        "<div id='step1'><span class='opt'>1.</span> Create your password"
+        "<input class='ussd-in' type='password' name='new_password' id='p1' placeholder='Enter password' "
+        "autocomplete='new-password' required></div>"
+        "<div id='step2'><span class='opt'>2.</span> Confirm your password"
+        "<input class='ussd-in' type='password' name='confirm_password' id='p2' placeholder='Re-enter password' "
+        "autocomplete='new-password'></div>"
+        "<div class='steps'><i id='d1' class='on'></i><i id='d2'></i></div>"
+        "</div>"
+        "<div class='ussd-actions'><a href='" + cancel_url + "' class='ussd-btn'>Cancel</a>"
+        "<button type='button' class='ussd-btn' id='nextbtn'>Next</button>"
+        "<button type='submit' class='ussd-btn' id='sendbtn'>Send</button></div></form>"
+        "<script>(function(){var h=document.documentElement;h.classList.add('js');"
+        "var p1=document.getElementById('p1'),p2=document.getElementById('p2');"
+        "document.getElementById('nextbtn').onclick=function(){if(p1.value.length<6){p1.focus();p1.classList.add('bad');return}"
+        "h.classList.add('step2');document.getElementById('d2').className='on';p2.required=true;p2.focus()};"
+        "p1.onkeydown=function(e){if(e.key==='Enter'){e.preventDefault();document.getElementById('nextbtn').click()}}})()</script>"
+    )
+
+
+def _registration_done(next_url):
+    return (
+        "<div class='ussd'><div class='ussd-head'>EduLink</div><div class='ussd-body reg-done'>"
+        "<svg class='tick' viewBox='0 0 52 52'><circle class='tick-c' cx='26' cy='26' r='24'/>"
+        "<path class='tick-p' d='M14 27l8 8 16-17'/></svg>"
+        "<div class='reg-ok'>Registration completed successfully.</div>"
+        "<div class='reg-wait'>Please wait for the menu<span class='dots'></span></div>"
+        "<div class='loader'><span></span></div></div></div>"
+        "<script>setTimeout(function(){location.href='" + next_url + "'},3800)</script>"
+        "<noscript><meta http-equiv='refresh' content='4;url=" + next_url + "'></noscript>"
+    )
+
+
+def _password_problem(pw, confirm):
+    if len(pw) < 6:
+        return "Password must be at least 6 characters."
+    if pw != confirm:
+        return "Passwords do not match."
+    return None
+
+
 @app.route("/registration", methods=["GET", "POST"])
 def registration_view():
-    """First login of a new account: a USSD-style menu, then 'registration completed'."""
+    """First login of a new staff account: a USSD-style menu, then 'registration completed'."""
     if "staff_no" not in session or not session.get("must_reset_password"):
         return redirect(url_for("login_view"))
     db = get_db()
@@ -564,51 +648,44 @@ def registration_view():
             return redirect(url_for("change_password_view"))
         me = db.conn.execute("SELECT first_name, last_name FROM teachers WHERE staff_no=?", (staff_no,)).fetchone()
         name = f"{me['first_name']} {me['last_name']}" if me else staff_no
-
         if request.method == "POST":
             pw, confirm = request.form.get("new_password", ""), request.form.get("confirm_password", "")
-            if len(pw) < 6:
-                flash("Password must be at least 6 characters.")
-            elif pw != confirm:
-                flash("Passwords do not match.")
+            problem = _password_problem(pw, confirm)
+            if problem:
+                flash(problem)
             else:
                 db.complete_registration(staff_no, pw)
                 session.pop("must_reset_password", None)
-                done = (
-                    "<div class='ussd'><div class='ussd-head'>EduLink</div><div class='ussd-body reg-done'>"
-                    "<svg class='tick' viewBox='0 0 52 52'><circle class='tick-c' cx='26' cy='26' r='24'/>"
-                    "<path class='tick-p' d='M14 27l8 8 16-17'/></svg>"
-                    "<div class='reg-ok'>Registration completed successfully.</div>"
-                    "<div class='reg-wait'>Please wait for the menu<span class='dots'></span></div>"
-                    "<div class='loader'><span></span></div></div></div>"
-                    "<script>setTimeout(function(){location.href='" + url_for("dashboard") + "'},3800)</script>"
-                    "<noscript><meta http-equiv='refresh' content='4;url=" + url_for("dashboard") + "'></noscript>"
-                )
-                return page("Registration", done, nav=False)
+                return page("Registration", _registration_done(url_for("dashboard")), nav=False)
+        return page("Registration", _registration_form(name, staff_no, url_for("logout")), nav=False)
+    finally:
+        db.close()
 
-        body = (
-            "<form method='post' id='regform' class='ussd' autocomplete='off'>"
-            "<div class='ussd-head'>EduLink &middot; Registration</div>"
-            "<div class='ussd-body'>"
-            f"Welcome <b>{esc(name)}</b>.<br>Username: <b>{esc(staff_no)}</b><br><br>"
-            "<div id='step1'><span class='opt'>1.</span> Create your password"
-            "<input class='ussd-in' type='password' name='new_password' id='p1' placeholder='Enter password' "
-            "autocomplete='new-password' required></div>"
-            "<div id='step2'><span class='opt'>2.</span> Confirm your password"
-            "<input class='ussd-in' type='password' name='confirm_password' id='p2' placeholder='Re-enter password' "
-            "autocomplete='new-password'></div>"
-            "<div class='steps'><i id='d1' class='on'></i><i id='d2'></i></div>"
-            "</div>"
-            "<div class='ussd-actions'><a href='" + url_for("logout") + "' class='ussd-btn'>Cancel</a>"
-            "<button type='button' class='ussd-btn' id='nextbtn'>Next</button>"
-            "<button type='submit' class='ussd-btn' id='sendbtn'>Send</button></div></form>"
-            "<script>(function(){var h=document.documentElement;h.classList.add('js');"
-            "var p1=document.getElementById('p1'),p2=document.getElementById('p2');"
-            "document.getElementById('nextbtn').onclick=function(){if(p1.value.length<6){p1.focus();p1.classList.add('bad');return}"
-            "h.classList.add('step2');document.getElementById('d2').className='on';p2.required=true;p2.focus()};"
-            "p1.onkeydown=function(e){if(e.key==='Enter'){e.preventDefault();document.getElementById('nextbtn').click()}}})()</script>"
-        )
-        return page("Registration", body, nav=False)
+
+@app.route("/parent/registration", methods=["GET", "POST"])
+def parent_registration_view():
+    """First login of a parent account: the same menu."""
+    pid = session.get("parent_id")
+    if not pid or not session.get("parent_must_register"):
+        return redirect(url_for("parent_login_view"))
+    db = get_db()
+    try:
+        if not db.parent_needs_registration(pid):
+            session.pop("parent_must_register", None)
+            return redirect(url_for("parent_dashboard"))
+        me = db.conn.execute("SELECT first_name, last_name, username, email FROM parents WHERE id=?", (pid,)).fetchone()
+        name = f"{me['first_name']} {me['last_name']}".strip() or "Parent"
+        username = me["username"] or me["email"] or ""
+        if request.method == "POST":
+            pw, confirm = request.form.get("new_password", ""), request.form.get("confirm_password", "")
+            problem = _password_problem(pw, confirm)
+            if problem:
+                flash(problem)
+            else:
+                db.complete_parent_registration(pid, pw)
+                session.pop("parent_must_register", None)
+                return page("Registration", _registration_done(url_for("parent_dashboard")), nav=False)
+        return page("Registration", _registration_form(name, username, url_for("parent_logout")), nav=False)
     finally:
         db.close()
 
@@ -640,9 +717,9 @@ def reset_password_view():
     if request.method == "POST":
         db = get_db()
         try:
-            db.reset_password_with_token(request.form["token"], request.form["new_password"])
+            kind = db.reset_password_with_token(request.form["token"], request.form["new_password"])
             flash("Password updated.")
-            return redirect(url_for("login_view"))
+            return redirect(url_for("parent_login_view" if kind == "parent" else "login_view"))
         except AuthError as e:
             flash(_err(e))
         finally:
@@ -731,13 +808,24 @@ def stat_cards(data: dict) -> str:
 @app.route("/parent/login", methods=["GET", "POST"])
 def parent_login_view():
     if request.method == "POST":
+        identifier = request.form["email"].strip()
+        key = _throttle_key("parent:" + identifier)
+        if _is_throttled(key):
+            flash("Error, please try again later")
+            return redirect(url_for("parent_login_view"))
         db = get_db()
         try:
-            parent_id = db.parent_login(request.form["email"].strip(), request.form["password"])
+            parent_id = db.parent_login(identifier, request.form["password"])
+            _clear_failures(key)
             session["parent_id"] = parent_id
             session.permanent = bool(request.form.get("remember"))
+            if db.parent_needs_registration(parent_id):
+                session["parent_must_register"] = True
+                return redirect(url_for("parent_registration_view"))
+            session.pop("parent_must_register", None)
             return redirect(url_for("parent_dashboard"))
         except AuthError as e:
+            _record_failure(key)
             flash(_err(e))
         finally:
             db.close()
@@ -765,20 +853,14 @@ def parent_login_view():
 @app.route("/parent/forgot-password", methods=["GET", "POST"])
 def forgot_password_view_parent():
     if request.method == "POST":
-        db = get_db()
-        try:
-            db.request_password_reset("parent", request.form["email"].strip())
-        except Exception:
-            pass
-        finally:
-            db.close()
-        flash("If that account exists, a reset token has been sent.")
+        flash("Ask an administrator for a one-time code.")
     body = """
     <form method="post">
-      Email: <input name="email"><br><br>
-      <button type="submit">Send reset token</button>
+      Username: <input name="email"><br><br>
+      <button type="submit">Request a code</button>
     </form>
-    <p><a href="{{ url_for('reset_password_view') }}">Have a token already? Reset here.</a></p>
+    <p><a href="{{ url_for('reset_password_view') }}">I already have a code &rarr; reset my password</a></p>
+    <p><a href="{{ url_for('parent_login_view') }}">Back to login</a></p>
     """
     return page("Parent: Forgot Password", body, nav=False)
 
@@ -790,7 +872,7 @@ def parent_logout():
 
 
 def _require_parent_login():
-    if "parent_id" not in session:
+    if "parent_id" not in session or session.get("parent_must_register"):
         return None
     return get_db(), session["parent_id"]
 
@@ -912,6 +994,7 @@ APP_META = {
     "students_view":       ("\U0001F393", "Students",       "Search, enrol and manage learners",         "People",         "#DDF3E6"),
     "staff_view":          ("\U0001F465", "Staff",          "Teachers, roles, assignments and HR",       "People",         "#D7EEE6"),
     "departments_view":    ("\U0001F3DB", "Departments",    "Departments and heads of department",       "People",         "#E3F4D8"),
+    "parents_view":        ("\U0001F46A", "Parents",        "Parent logins",                             "People",         "#E3F4D8"),
     "alumni_view":         ("\U0001F3C5", "Alumni",         "Graduates and their contacts",              "People",         "#EAF5CF"),
     "marks_view":          ("\u270F\uFE0F", "Marks",        "Enter, correct and submit marks",           "Teaching",       "#D3EFDF"),
     "attendance_view":     ("\U0001F4CB", "Attendance",     "Class attendance reports",                  "Teaching",       "#D2EDEA"),
@@ -2923,6 +3006,68 @@ def messages_view():
 # ----------------------------------------------------------------------
 # alumni
 # ----------------------------------------------------------------------
+@app.route("/parents", methods=["GET", "POST"])
+def parents_view():
+    ctx = _guard()
+    if ctx is None:
+        return redirect(url_for("login_view"))
+    db, staff_no = ctx
+    if not db.has_full_oversight(staff_no):
+        db.close()
+        return page("Parents", '<div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>')
+
+    if request.method == "POST":
+        action = request.form.get("action")
+        try:
+            if action == "add_parent":
+                _pid, user, temp = db.create_parent_account(request.form["adm_no"], request.form["guardian"], staff_no)
+                flash(f"Created. Username: {user}  Password: {temp}")
+            elif action == "link_student":
+                adm = request.form["adm_no"].strip()
+                row = db.conn.execute("SELECT adm_no FROM students WHERE adm_no=? COLLATE NOCASE", (adm,)).fetchone()
+                if not row:
+                    flash("No such student.")
+                else:
+                    db.link_parent_to_student(int(request.form["parent_id"]), row["adm_no"])
+                    flash("Linked.")
+            elif action == "parent_otp":
+                flash(f"OTP: {db.generate_parent_otp(int(request.form['parent_id']), staff_no)}")
+            elif action == "remove_parent":
+                db.remove_parent(int(request.form["parent_id"]), staff_no)
+                flash("Removed.")
+        except (PermissionDenied, NotFound, ValueError) as e:
+            flash(_err(e))
+
+    parents = db.list_parents()
+    db.close()
+
+    rows = ""
+    for p in parents:
+        pid = str(p["id"])
+        status = ("<span class='chip'>Registered</span>" if p["registered"]
+                  else "<span class='chip' style='background:#FFF6DA'>Pending</span>")
+        rows += (
+            "<tr><td class='mono'>" + esc(p["username"]) + "</td><td>" + esc(p["name"]) + "</td>"
+            "<td class='wrap'>" + (esc(", ".join(p["students"])) or "-") + "</td><td>" + status + "</td><td>"
+            "<form method='post'><input type='hidden' name='action' value='link_student'>"
+            "<input type='hidden' name='parent_id' value='" + pid + "'>"
+            "<input name='adm_no' placeholder='Add student' size='10' required><button type='submit'>Link</button></form>"
+            "<form method='post'><input type='hidden' name='action' value='parent_otp'>"
+            "<input type='hidden' name='parent_id' value='" + pid + "'><button type='submit'>OTP</button></form>"
+            "<form method='post' onsubmit=\"return confirm('Remove this parent account?')\">"
+            "<input type='hidden' name='action' value='remove_parent'><input type='hidden' name='parent_id' value='" + pid + "'>"
+            "<button type='submit' class='btn-danger'>Remove</button></form></td></tr>"
+        )
+    body = (
+        "<form method='post'><input type='hidden' name='action' value='add_parent'>"
+        "Student admission number: <input name='adm_no' required> Parent name: <input name='guardian' required>"
+        "<button type='submit'>Create login</button></form><br>"
+        "<div class='grid-wrap'><table><thead><tr><th>Username</th><th>Parent</th><th>Students</th><th>Status</th><th></th></tr></thead>"
+        "<tbody>" + (rows or "<tr><td colspan='5'>No parent accounts yet.</td></tr>") + "</tbody></table></div>"
+    )
+    return page("Parents", body)
+
+
 @app.route("/alumni", methods=["GET", "POST"])
 def alumni_view():
     ctx = _guard()
