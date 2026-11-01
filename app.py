@@ -413,6 +413,8 @@ NAV_ITEMS = [
     ("messages_view", "Messages", "MS", "all"),
     ("alumni_view", "Alumni", "AL", "oversight"),
     ("parents_view", "Parents", "PA", "oversight"),
+    ("my_requests_view", "My Requests", "MR", "exec_only"),
+    ("registry_view", "Registry", "RG", "registrar"),
     ("academic_setup_view", "Academic Setup", "AS", "oversight"),
     ("notifications_view", "Notifications", "NO", "all"),
     ("audit_log_view", "Audit Log", "AU", "oversight"),
@@ -420,7 +422,7 @@ NAV_ITEMS = [
     ("reports_view", "Reports", "RP", "all"),
 ]
 
-_NAV_VISIBILITY_VAR = {"all": None, "oversight": "oversight_flag", "staffing": "staffing_flag", "hod": "hod_flag"}
+_NAV_VISIBILITY_VAR = {"all": None, "oversight": "oversight_flag", "staffing": "staffing_flag", "hod": "hod_flag", "registrar": "registrar_flag", "exec_only": "exec_only_flag"}
 
 NAV = """
 <div class="brand">EduLink<small>School Administration System</small></div>
@@ -469,6 +471,8 @@ def page(title, body, nav=True):
     oversight_flag = False
     staffing_flag = False
     hod_flag = False
+    registrar_flag = False
+    exec_only_flag = False
     if "staff_no" in session:
         db = get_db()
         try:
@@ -477,6 +481,8 @@ def page(title, body, nav=True):
             hod_flag = oversight_flag or any(
                 r["role"] == "hod" for r in db.get_roles(session["staff_no"])
             )
+            registrar_flag = db.is_registrar(session["staff_no"])
+            exec_only_flag = oversight_flag and not registrar_flag
         finally:
             db.close()
 
@@ -527,7 +533,8 @@ def page(title, body, nav=True):
     </script>
     </body></html>"""
     return render_template_string(template, oversight_flag=oversight_flag,
-                                   staffing_flag=staffing_flag, hod_flag=hod_flag)
+                                   staffing_flag=staffing_flag, hod_flag=hod_flag,
+                                   registrar_flag=registrar_flag, exec_only_flag=exec_only_flag)
 
 
 # ----------------------------------------------------------------------
@@ -1033,6 +1040,8 @@ APP_META = {
     "staff_view":          ("\U0001F465", "Staff",          "Teachers, roles, assignments and HR",       "People",         "#D7EEE6"),
     "departments_view":    ("\U0001F3DB", "Departments",    "Departments and heads of department",       "People",         "#E3F4D8"),
     "parents_view":        ("\U0001F46A", "Parents",        "Parent logins",                             "People",         "#E3F4D8"),
+    "my_requests_view":    ("\U0001F4C4", "My Requests",   "Registry change requests you have filed",   "People",         "#FFF1D6"),
+    "registry_view":       ("\U0001F4D1", "Registry",       "Review, approve or reject registry requests", "People",         "#F3DDC4"),
     "alumni_view":         ("\U0001F3C5", "Alumni",         "Graduates and their contacts",              "People",         "#EAF5CF"),
     "marks_view":          ("\u270F\uFE0F", "Marks",        "Enter, correct and submit marks",           "Teaching",       "#D3EFDF"),
     "attendance_view":     ("\U0001F4CB", "Attendance",     "Class attendance reports",                  "Teaching",       "#D2EDEA"),
@@ -1055,10 +1064,12 @@ def build_app_tiles(db, staff_no, unread=0):
     """Only the apps this person can actually use, grouped. Components an
     executive has switched off are left out for everyone else."""
     oversight = db.has_full_oversight(staff_no)
+    registrar = db.is_registrar(staff_no)
     flags = {
         "all": True, "oversight": oversight,
         "staffing": oversight or bool(db.staffing_manager_forms(staff_no)),
         "hod": oversight or any(r["role"] == "hod" for r in db.get_roles(staff_no)),
+        "registrar": registrar, "exec_only": oversight and not registrar,
     }
     groups = {g: [] for g in APP_GROUP_ORDER}
     for endpoint, _label, _tag, visibility in NAV_ITEMS:
@@ -1207,11 +1218,12 @@ def students_view():
         return redirect(url_for("login_view"))
     db, staff_no = ctx
     oversight = db.has_full_oversight(staff_no)
+    registrar = db.is_registrar(staff_no)
     results = []
     if request.method == "POST" and request.form.get("action") == "search":
         results = db.search_students(request.form["query"], include_alumni=bool(request.form.get("include_alumni")))
     if request.method == "POST" and request.form.get("action") == "add":
-        if not oversight:
+        if not registrar:
             flash("Not allowed.")
         else:
             try:
@@ -1221,6 +1233,19 @@ def students_view():
                 flash(f"Added student {adm_no}.")
             except (NotFound, ValueError) as e:
                 flash(_err(e))
+    if request.method == "POST" and request.form.get("action") in (
+            "request_add_student", "request_edit_student", "request_change_class", "request_remove_student"):
+        if not oversight:
+            flash("Not allowed.")
+        else:
+            kind = {"request_add_student": "add_student", "request_edit_student": "edit_student",
+                    "request_change_class": "change_class", "request_remove_student": "remove_student"}[request.form["action"]]
+            payload = {k: v for k, v in request.form.items() if k not in ("action", "csrf_token") and v.strip()}
+            try:
+                ref = db.submit_registry_request(staff_no, kind, payload)
+                flash(f"Submitted {ref}.")
+            except (PermissionDenied, ValueError) as e:
+                flash(_err(e))
     if request.method == "POST" and request.form.get("action") == "remove_student":
         try:
             db.remove_student_permanently(request.form["adm_no"], staff_no)
@@ -1229,7 +1254,7 @@ def students_view():
             flash(_err(e))
 
     if request.method == "POST" and request.form.get("action") == "save_student_grid":
-        if not oversight:
+        if not registrar:
             flash("Not allowed.")
         elif request.form.get("remove"):
             try:
@@ -1285,7 +1310,7 @@ def students_view():
 
     def _student_row(i, s):
         view = f"<a href='{url_for('student_detail', adm_no=s['adm_no'])}'>View</a>"
-        if not oversight:
+        if not registrar:
             return (f"<tr><td class='mono'>{s['adm_no']}</td><td>{esc(s['first_name'])} {esc(s['last_name'])}</td>"
                     f"<td>{s['form_number']}{s['stream_code']}</td><td>{s['gender'] or '-'}</td><td>{view}</td></tr>")
         g = s["gender"] or ""
@@ -1307,7 +1332,7 @@ def students_view():
         )
 
     rows_html = "".join(_student_row(i, s) for i, s in enumerate(grid)) or "<tr><td colspan='8'>No students yet.</td></tr>"
-    if oversight:
+    if registrar:
         heads = "<th>Adm No</th><th>First name</th><th>Last name</th><th>Form</th><th>Stream</th><th>Gender</th><th></th><th></th>"
         grid_html = (
             f"<form method='post' class='grid-form' action='?grid_form={esc(grid_form)}'>"
@@ -1320,18 +1345,52 @@ def students_view():
         heads = "<th>Adm No</th><th>Name</th><th>Class</th><th>Gender</th><th></th>"
         grid_html = f"<div class='grid-wrap'><table><thead><tr>{heads}</tr></thead><tbody>{rows_html}</tbody></table></div>"
 
-    add_section = """
-    <h3>Add student</h3>
-    <form method="post">
-      <input type="hidden" name="action" value="add">
-      First name: <input name="first_name"> Last name: <input name="last_name">
-      Form: <input name="form_number" size="2" value="1"> Stream: <input name="stream" size="8" value="White">
-      Gender: <select name="gender"><option value="">-</option><option value="M">M</option><option value="F">F</option></select>
-      <button type="submit">Add</button>
-    </form>
-    """ if oversight else """
-    <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>
-    """
+    if registrar:
+        add_section = """
+        <h3>Add student</h3>
+        <form method="post">
+          <input type="hidden" name="action" value="add">
+          First name: <input name="first_name"> Last name: <input name="last_name">
+          Form: <input name="form_number" size="2" value="1"> Stream: <input name="stream" size="8" value="White">
+          Gender: <select name="gender"><option value="">-</option><option value="M">M</option><option value="F">F</option></select>
+          <button type="submit">Add</button>
+        </form>
+        """
+    elif oversight:
+        add_section = """
+        <h3>Submit a registry request</h3>
+        <div class="split">
+          <form method="post">
+            <input type="hidden" name="action" value="request_add_student">
+            <b>Add student</b><br>
+            First name: <input name="first_name"> Last name: <input name="last_name">
+            Form: <input name="form_number" size="2" value="1"> Stream: <input name="stream" size="8" value="White">
+            <button type="submit">Submit</button>
+          </form>
+          <form method="post">
+            <input type="hidden" name="action" value="request_edit_student">
+            <b>Edit student</b><br>
+            Adm No: <input name="adm_no"> First name: <input name="first_name"> Last name: <input name="last_name">
+            <button type="submit">Submit</button>
+          </form>
+          <form method="post">
+            <input type="hidden" name="action" value="request_change_class">
+            <b>Change class</b><br>
+            Adm No: <input name="adm_no"> Form: <input name="form_number" size="2"> Stream: <input name="stream" size="8">
+            <button type="submit">Submit</button>
+          </form>
+          <form method="post">
+            <input type="hidden" name="action" value="request_remove_student">
+            <b>Remove student</b><br>
+            Adm No: <input name="adm_no">
+            <button type="submit">Submit</button>
+          </form>
+        </div>
+        """
+    else:
+        add_section = """
+        <div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>
+        """
 
     body = f"""
     <form method="post">
@@ -1386,7 +1445,7 @@ def student_detail(adm_no):
                                        request.form.get("method", "cash"), recorded_by=staff_no)
                     flash("Payment recorded -- a receipt is available below.")
             elif action == "update_profile":
-                if not db.has_full_oversight(staff_no):
+                if not db.is_registrar(staff_no):
                     raise PermissionDenied("not allowed")
                 db.update_student(adm_no, first_name=request.form.get("first_name") or None,
                                    last_name=request.form.get("last_name") or None,
@@ -1407,7 +1466,7 @@ def student_detail(adm_no):
     student_row = db.conn.execute(
         "SELECT first_name, last_name, form_number, stream_code FROM students WHERE adm_no=?", (adm_no,)
     ).fetchone()
-    can_edit_student = db.has_full_oversight(staff_no)
+    can_edit_student = db.is_registrar(staff_no)
 
     term = request.values.get("term", "1")
     year = request.values.get("year", "2026")
@@ -1612,6 +1671,7 @@ def staff_view():
         return redirect(url_for("login_view"))
     db, staff_no = ctx
     oversight = db.has_full_oversight(staff_no)
+    registrar = db.is_registrar(staff_no)
     my_staffing_forms = [] if oversight else db.staffing_manager_forms(staff_no)
     has_staffing_power = oversight or bool(my_staffing_forms)
 
@@ -1619,13 +1679,25 @@ def staff_view():
         action = request.form.get("action")
         try:
             if action == "add_teacher":
-                if not oversight:
+                if not registrar:
                     flash("Not allowed.")
                 else:
                     new_no = db.add_teacher(request.form["first_name"], request.form["last_name"],
                                              email=request.form.get("email") or None)
                     temp_pw = db.generate_temp_password_for(new_no)
                     flash(f"Added teacher {new_no}, temp password: {temp_pw}")
+            elif action in ("request_add_teacher", "request_edit_teacher", "request_remove_teacher"):
+                if not oversight:
+                    flash("Not allowed.")
+                else:
+                    kind = {"request_add_teacher": "add_teacher", "request_edit_teacher": "edit_teacher",
+                            "request_remove_teacher": "remove_teacher"}[action]
+                    payload = {k: v for k, v in request.form.items() if k not in ("action", "csrf_token") and v.strip()}
+                    try:
+                        ref = db.submit_registry_request(staff_no, kind, payload)
+                        flash(f"Submitted {ref}.")
+                    except (PermissionDenied, ValueError) as e:
+                        flash(_err(e))
             elif action == "grant_role":
                 if not oversight:
                     flash("Not allowed.")
@@ -1702,7 +1774,7 @@ def staff_view():
                                  approve=request.form["decision"] == "approve")
                 flash("Leave request updated.")
             elif action == "save_teacher_grid":
-                if not oversight:
+                if not registrar:
                     flash("Not allowed.")
                 elif request.form.get("remove"):
                     db.remove_teacher_permanently(request.form["remove"], staff_no)
@@ -1732,7 +1804,7 @@ def staff_view():
                         msg += " Not saved -- " + "; ".join(errors)
                     flash(msg)
             elif action == "edit_teacher":
-                if not oversight:
+                if not registrar:
                     flash("Not allowed.")
                 else:
                     new_no = db.update_teacher(
@@ -1765,32 +1837,82 @@ def staff_view():
         grid = db.teacher_grid()
         cur = {r["staff_no"]: r for r in db.conn.execute("SELECT staff_no, first_name, last_name FROM teachers")}
 
-        def _staff_row(i, t):
-            c = cur[t["staff_no"]]
-            return (
-                "<tr>"
-                f"<td><input type='hidden' name='orig_{i}' value='{esc(t['staff_no'])}'>"
-                f"<input class='cell mono' name='sn_{i}' value='{esc(t['staff_no'])}'></td>"
-                f"<td><input class='cell' name='fn_{i}' value='{esc(c['first_name'])}'></td>"
-                f"<td><input class='cell' name='ln_{i}' value='{esc(c['last_name'])}'></td>"
+        if registrar:
+            def _staff_row(i, t):
+                c = cur[t["staff_no"]]
+                return (
+                    "<tr>"
+                    f"<td><input type='hidden' name='orig_{i}' value='{esc(t['staff_no'])}'>"
+                    f"<input class='cell mono' name='sn_{i}' value='{esc(t['staff_no'])}'></td>"
+                    f"<td><input class='cell' name='fn_{i}' value='{esc(c['first_name'])}'></td>"
+                    f"<td><input class='cell' name='ln_{i}' value='{esc(c['last_name'])}'></td>"
+                    f"<td class='wrap'>{', '.join(r.replace('_', ' ') for r in t['roles']) or '-'}</td>"
+                    f"<td class='wrap'>{', '.join(t['class_teacher_of']) or '-'}</td>"
+                    f"<td class='wrap'>{', '.join(t['supervises_forms']) or '-'}</td>"
+                    f"<td class='wrap'>{', '.join(t['teaching']) or '-'}</td>"
+                    f"<td><button type='submit' name='remove' value='{esc(t['staff_no'])}' class='btn-danger' "
+                    "onclick=\"return confirm('Permanently remove this teacher? This cannot be undone.')\">Remove</button></td>"
+                    "</tr>"
+                )
+
+            roster_section = (
+                "<h3>Staff</h3>"
+                "<form method='post' class='grid-form'><input type='hidden' name='action' value='save_teacher_grid'>"
+                "<button type='submit' style='position:absolute;left:-9999px' tabindex='-1' aria-hidden='true'>Save</button>"
+                "<div class='grid-wrap'><table><thead><tr><th>Staff No</th><th>First name</th><th>Last name</th>"
+                "<th>Roles</th><th>Class teacher of</th><th>Supervises</th><th>Teaching</th><th></th></tr></thead>"
+                "<tbody>" + "".join(_staff_row(i, t) for i, t in enumerate(grid)) + "</tbody></table></div>"
+                "<div class='grid-actions'><button type='submit'>Save changes</button></div></form>"
+            )
+            add_teacher_section = """
+            <h3>Add teacher (issues a temp password)</h3>
+            <form method="post">
+              <input type="hidden" name="action" value="add_teacher">
+              First name: <input name="first_name"> Last name: <input name="last_name">
+              Email: <input name="email">
+              <button type="submit">Add</button>
+            </form>
+            """
+        else:
+            roster_rows_ro = "".join(
+                f"<tr><td class='mono'>{esc(t['staff_no'])}</td><td>{esc(t['name'])}</td>"
                 f"<td class='wrap'>{', '.join(r.replace('_', ' ') for r in t['roles']) or '-'}</td>"
                 f"<td class='wrap'>{', '.join(t['class_teacher_of']) or '-'}</td>"
                 f"<td class='wrap'>{', '.join(t['supervises_forms']) or '-'}</td>"
-                f"<td class='wrap'>{', '.join(t['teaching']) or '-'}</td>"
-                f"<td><button type='submit' name='remove' value='{esc(t['staff_no'])}' class='btn-danger' "
-                "onclick=\"return confirm('Permanently remove this teacher? This cannot be undone.')\">Remove</button></td>"
-                "</tr>"
+                f"<td class='wrap'>{', '.join(t['teaching']) or '-'}</td></tr>"
+                for t in grid
             )
-
-        roster_section = (
-            "<h3>Staff</h3>"
-            "<form method='post' class='grid-form'><input type='hidden' name='action' value='save_teacher_grid'>"
-            "<button type='submit' style='position:absolute;left:-9999px' tabindex='-1' aria-hidden='true'>Save</button>"
-            "<div class='grid-wrap'><table><thead><tr><th>Staff No</th><th>First name</th><th>Last name</th>"
-            "<th>Roles</th><th>Class teacher of</th><th>Supervises</th><th>Teaching</th><th></th></tr></thead>"
-            "<tbody>" + "".join(_staff_row(i, t) for i, t in enumerate(grid)) + "</tbody></table></div>"
-            "<div class='grid-actions'><button type='submit'>Save changes</button></div></form>"
-        )
+            roster_section = (
+                "<h3>Staff</h3>"
+                "<div class='grid-wrap'><table><thead><tr><th>Staff No</th><th>Name</th><th>Roles</th>"
+                "<th>Class teacher of</th><th>Supervises</th><th>Teaching</th></tr></thead>"
+                "<tbody>" + roster_rows_ro + "</tbody></table></div>"
+            )
+            add_teacher_section = """
+            <h3>Submit a registry request</h3>
+            <div class="split">
+              <form method="post">
+                <input type="hidden" name="action" value="request_add_teacher">
+                <b>Add teacher</b><br>
+                First name: <input name="first_name"> Last name: <input name="last_name">
+                Email: <input name="email">
+                <button type="submit">Submit</button>
+              </form>
+              <form method="post">
+                <input type="hidden" name="action" value="request_edit_teacher">
+                <b>Edit teacher</b><br>
+                Staff No: <input name="staff_no"> New Staff No: <input name="new_staff_no">
+                First name: <input name="first_name"> Last name: <input name="last_name">
+                <button type="submit">Submit</button>
+              </form>
+              <form method="post">
+                <input type="hidden" name="action" value="request_remove_teacher">
+                <b>Remove teacher</b><br>
+                Staff No: <input name="staff_no">
+                <button type="submit">Submit</button>
+              </form>
+            </div>
+            """
         adm_criteria = db.get_id_criteria("admission")
         staff_criteria = db.get_id_criteria("staff")
         id_settings_section = f"""
@@ -1848,15 +1970,6 @@ def staff_view():
           {leave_rows or "<tr><td colspan='5'>No pending requests.</td></tr>"}
         </table>
         """
-        add_teacher_section = f"""
-        <h3>Add teacher (issues a temp password)</h3>
-        <form method="post">
-          <input type="hidden" name="action" value="add_teacher">
-          First name: <input name="first_name"> Last name: <input name="last_name">
-          Email: <input name="email">
-          <button type="submit">Add</button>
-        </form>
-        """
         role_section = f"""
         <h3>Grant a role</h3>
         <form method="post">
@@ -1866,6 +1979,7 @@ def staff_view():
           <select name="role">
             <option>principal</option><option>deputy_principal_academics</option>
             <option>deputy_principal_admin</option><option>dean_of_studies</option><option>hod</option>
+            <option>registrar</option>
           </select>
           Scope (dept code if HOD): <input name="scope" value="school">
           <button type="submit">Grant</button>
@@ -3205,14 +3319,18 @@ def parents_view():
     if ctx is None:
         return redirect(url_for("login_view"))
     db, staff_no = ctx
-    if not db.has_full_oversight(staff_no):
+    oversight = db.has_full_oversight(staff_no)
+    registrar = db.is_registrar(staff_no)
+    if not oversight:
         db.close()
         return page("Parents", '<div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>')
 
     if request.method == "POST":
         action = request.form.get("action")
         try:
-            if action == "add_parent":
+            if not registrar and action in ("add_parent", "link_student", "remove_parent"):
+                flash("Not allowed.")
+            elif action == "add_parent":
                 _pid, user, temp = db.create_parent_account(request.form["adm_no"], request.form["guardian"], staff_no)
                 flash(f"Created. Username: {user}  Password: {temp}")
             elif action == "link_student":
@@ -3221,13 +3339,18 @@ def parents_view():
                 if not row:
                     flash("No such student.")
                 else:
-                    db.link_parent_to_student(int(request.form["parent_id"]), row["adm_no"])
+                    db.link_parent_to_student(int(request.form["parent_id"]), row["adm_no"], requested_by=staff_no)
                     flash("Linked.")
             elif action == "parent_otp":
                 flash(f"OTP: {db.generate_parent_otp(int(request.form['parent_id']), staff_no)}")
             elif action == "remove_parent":
                 db.remove_parent(int(request.form["parent_id"]), staff_no)
                 flash("Removed.")
+            elif action in ("request_add_parent", "request_link_sibling"):
+                kind = {"request_add_parent": "add_parent", "request_link_sibling": "link_sibling"}[action]
+                payload = {k: v for k, v in request.form.items() if k not in ("action", "csrf_token") and v.strip()}
+                ref = db.submit_registry_request(staff_no, kind, payload)
+                flash(f"Submitted {ref}.")
         except (PermissionDenied, NotFound, ValueError) as e:
             flash(_err(e))
 
@@ -3239,9 +3362,7 @@ def parents_view():
         pid = str(p["id"])
         status = ("<span class='chip'>Registered</span>" if p["registered"]
                   else "<span class='chip' style='background:#FFF6DA'>Pending</span>")
-        rows += (
-            "<tr><td class='mono'>" + esc(p["username"]) + "</td><td>" + esc(p["name"]) + "</td>"
-            "<td class='wrap'>" + (esc(", ".join(p["students"])) or "-") + "</td><td>" + status + "</td><td>"
+        actions = (
             "<form method='post'><input type='hidden' name='action' value='link_student'>"
             "<input type='hidden' name='parent_id' value='" + pid + "'>"
             "<input name='adm_no' placeholder='Add student' size='10' required><button type='submit'>Link</button></form>"
@@ -3249,16 +3370,141 @@ def parents_view():
             "<input type='hidden' name='parent_id' value='" + pid + "'><button type='submit'>OTP</button></form>"
             "<form method='post' onsubmit=\"return confirm('Remove this parent account?')\">"
             "<input type='hidden' name='action' value='remove_parent'><input type='hidden' name='parent_id' value='" + pid + "'>"
-            "<button type='submit' class='btn-danger'>Remove</button></form></td></tr>"
+            "<button type='submit' class='btn-danger'>Remove</button></form>"
+        ) if registrar else ""
+        rows += (
+            "<tr><td class='mono'>" + esc(p["username"]) + "</td><td>" + esc(p["name"]) + "</td>"
+            "<td class='wrap'>" + (esc(", ".join(p["students"])) or "-") + "</td><td>" + status + "</td><td>"
+            + actions + "</td></tr>"
         )
+
+    if registrar:
+        action_section = (
+            "<h3>Create login</h3>"
+            "<form method='post'><input type='hidden' name='action' value='add_parent'>"
+            "Student admission number: <input name='adm_no' required> Parent name: <input name='guardian' required>"
+            "<button type='submit'>Create login</button></form>"
+        )
+    else:
+        action_section = """
+        <h3>Submit a registry request</h3>
+        <div class="split">
+          <form method="post">
+            <input type="hidden" name="action" value="request_add_parent">
+            <b>Add parent login</b><br>
+            Adm No: <input name="adm_no"> Parent name: <input name="guardian">
+            <button type="submit">Submit</button>
+          </form>
+          <form method="post">
+            <input type="hidden" name="action" value="request_link_sibling">
+            <b>Link sibling</b><br>
+            Parent ID: <input name="parent_id" size="6"> Adm No: <input name="adm_no">
+            <button type="submit">Submit</button>
+          </form>
+        </div>
+        """
+
     body = (
-        "<form method='post'><input type='hidden' name='action' value='add_parent'>"
-        "Student admission number: <input name='adm_no' required> Parent name: <input name='guardian' required>"
-        "<button type='submit'>Create login</button></form><br>"
         "<div class='grid-wrap'><table><thead><tr><th>Username</th><th>Parent</th><th>Students</th><th>Status</th><th></th></tr></thead>"
-        "<tbody>" + (rows or "<tr><td colspan='5'>No parent accounts yet.</td></tr>") + "</tbody></table></div>"
+        "<tbody>" + (rows or "<tr><td colspan='5'>No parent accounts yet.</td></tr>") + "</tbody></table></div><br>"
+        + action_section
     )
     return page("Parents", body)
+
+
+@app.route("/requests", methods=["GET"])
+def my_requests_view():
+    ctx = _guard()
+    if ctx is None:
+        return redirect(url_for("login_view"))
+    db, staff_no = ctx
+    if not db.has_full_oversight(staff_no):
+        db.close()
+        return page("My Requests", '<div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>')
+
+    mine = db.list_my_requests(staff_no)
+    db.close()
+
+    badge_color = {"submitted": "#E3F4D8", "under_review": "#FFF1D6", "approved": "#DDF3E6",
+                   "rejected": "#FBEAEA", "failed": "#FBEAEA"}
+    rows = ""
+    for r in mine:
+        detail = ""
+        if r["status"] == "rejected":
+            fixed = "Please submit correct details for the desired change or amendment."
+            detail = (r["rejection_reason"] + " " + fixed) if r["rejection_reason"] else fixed
+        elif r["status"] == "failed":
+            detail = r["failure_reason"] or ""
+        rows += (
+            f"<tr><td class='mono'>{esc(r['reference'])}</td><td>{esc(r['request_type'].replace('_',' '))}</td>"
+            f"<td><span class='chip' style='background:{badge_color[r['status']]}'>{esc(r['status'].replace('_',' ').title())}</span></td>"
+            f"<td class='wrap'>{esc(detail)}</td><td>{r['submitted_at'][:16]}</td></tr>"
+        )
+    body = (
+        "<div class='grid-wrap'><table><thead><tr><th>Reference</th><th>Type</th><th>Status</th>"
+        "<th>Note</th><th>Submitted</th></tr></thead><tbody>"
+        + (rows or "<tr><td colspan='5'>No requests submitted yet.</td></tr>") + "</tbody></table></div>"
+    )
+    return page("My Requests", body)
+
+
+@app.route("/registry", methods=["GET", "POST"])
+def registry_view():
+    ctx = _guard()
+    if ctx is None:
+        return redirect(url_for("login_view"))
+    db, staff_no = ctx
+    if not db.is_registrar(staff_no):
+        db.close()
+        return page("Registry", '<div class="flash" style="background:#FFF6E0;color:#8a6d1a;border-color:#F0DFA6">Not available.</div>')
+
+    if request.method == "POST":
+        reference = request.form.get("reference", "")
+        action = request.form.get("action")
+        try:
+            if action == "start_review":
+                db.start_review(reference, staff_no)
+                flash(f"{reference} is now under review.")
+            elif action == "approve":
+                db.approve_request(reference, staff_no)
+                flash(f"{reference} processed.")
+            elif action == "reject":
+                db.reject_request(reference, staff_no, reason=request.form.get("reason"))
+                flash(f"{reference} rejected.")
+        except (PermissionDenied, NotFound, ValueError) as e:
+            flash(_err(e))
+
+    queue = db.list_registry_queue()
+    db.close()
+
+    badge_color = {"submitted": "#E3F4D8", "under_review": "#FFF1D6", "approved": "#DDF3E6",
+                   "rejected": "#FBEAEA", "failed": "#FBEAEA"}
+    rows = ""
+    for r in queue:
+        payload_str = ", ".join(f"{k}: {v}" for k, v in r["payload"].items())
+        detail = r["failure_reason"] if r["status"] == "failed" else ""
+        buttons = ""
+        if r["status"] in ("submitted", "under_review", "failed"):
+            if r["status"] != "under_review":
+                buttons += (f"<form method='post' style='display:inline'><input type='hidden' name='reference' value='{esc(r['reference'])}'>"
+                           f"<input type='hidden' name='action' value='start_review'><button type='submit'>Start Review</button></form> ")
+            buttons += (f"<form method='post' style='display:inline'><input type='hidden' name='reference' value='{esc(r['reference'])}'>"
+                       f"<input type='hidden' name='action' value='approve'><button type='submit'>Approve</button></form> ")
+            buttons += (f"<form method='post' style='display:inline'><input type='hidden' name='reference' value='{esc(r['reference'])}'>"
+                       f"<input type='hidden' name='action' value='reject'>Reason (optional): "
+                       f"<input name='reason' size='18'><button type='submit' class='btn-danger'>Reject</button></form>")
+        rows += (
+            f"<tr><td class='mono'>{esc(r['reference'])}</td><td>{esc(r['request_type'].replace('_',' '))}</td>"
+            f"<td class='mono'>{esc(r['submitted_by'])}</td>"
+            f"<td><span class='chip' style='background:{badge_color[r['status']]}'>{esc(r['status'].replace('_',' ').title())}</span></td>"
+            f"<td class='wrap'>{esc(payload_str)}</td><td class='wrap'>{esc(detail)}</td><td>{buttons}</td></tr>"
+        )
+    body = (
+        "<div class='grid-wrap'><table><thead><tr><th>Reference</th><th>Type</th><th>Submitted by</th>"
+        "<th>Status</th><th>Details</th><th>Failure</th><th></th></tr></thead><tbody>"
+        + (rows or "<tr><td colspan='7'>Queue is empty.</td></tr>") + "</tbody></table></div>"
+    )
+    return page("Registry", body)
 
 
 @app.route("/alumni", methods=["GET", "POST"])

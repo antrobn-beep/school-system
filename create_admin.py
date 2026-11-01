@@ -28,10 +28,11 @@ else:
     db.add_teacher("System", "Administrator", staff_no=ADMIN_STAFF_NO, password="admin")
     print(f"Created account '{ADMIN_STAFF_NO}' / password 'admin'.")
 
-# Grant every executive role -- this is what makes 'admin' see and do
-# EVERYTHING: every class, every department, every report, results
-# publishing, and end-of-year promotion/graduation.
-for role in ("principal", "deputy_principal_academics", "deputy_principal_admin", "dean_of_studies"):
+# Grant every executive role (sees/does everything across marks, fees,
+# reports, promotion) PLUS 'registrar' -- the one role that can amend the
+# student/staff/parent registry directly instead of going through the
+# request queue, and that reviews/approves/rejects everyone else's requests.
+for role in ("principal", "deputy_principal_academics", "deputy_principal_admin", "dean_of_studies", "registrar"):
     db.grant_role(ADMIN_STAFF_NO, role)
 
 print("\nRoles granted:")

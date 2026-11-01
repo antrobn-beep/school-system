@@ -36,6 +36,7 @@ enough, they must be timetabled for that class.
 import sqlite3
 import hashlib
 import os
+import json
 import secrets
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
@@ -66,7 +67,7 @@ GRADE_POINTS = {
     "C": 6, "C-": 5, "D+": 4, "D": 3, "D-": 2, "E": 1,
 }
 
-EXECUTIVE_ROLES = {"principal", "deputy_principal_academics", "deputy_principal_admin", "dean_of_studies", "hod"}
+EXECUTIVE_ROLES = {"principal", "deputy_principal_academics", "deputy_principal_admin", "dean_of_studies", "hod", "registrar"}
 
 
 class PermissionDenied(Exception):
@@ -420,6 +421,23 @@ class SchoolDB:
             CREATE TABLE IF NOT EXISTS settings (
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
+            );
+
+            -- ---- registry change requests (eCitizen/IPRS-style approval queue) ----
+            CREATE TABLE IF NOT EXISTS registry_requests (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                reference        TEXT UNIQUE NOT NULL,
+                request_type     TEXT NOT NULL,
+                payload          TEXT NOT NULL,
+                status           TEXT NOT NULL DEFAULT 'submitted'
+                                 CHECK(status IN ('submitted','under_review','approved','rejected','failed')),
+                submitted_by     TEXT NOT NULL REFERENCES teachers(staff_no),
+                submitted_at     TEXT NOT NULL,
+                reviewed_by      TEXT REFERENCES teachers(staff_no),
+                reviewed_at      TEXT,
+                rejection_reason TEXT,
+                failure_reason   TEXT,
+                applied_at       TEXT
             );
 
             -- ---- HR: staff contracts ----
@@ -1412,6 +1430,167 @@ class SchoolDB:
             "matrix": matrix,  # matrix[subject_code][stream_code] = {mean, n, rank}
         }
 
+
+    # ------------------------------------------------------------------
+    # registry change requests (eCitizen/IPRS-style approval queue)
+    # ------------------------------------------------------------------
+    _REQUEST_TYPES = {
+        "add_student":   ("first_name", "last_name", "form_number", "stream"),
+        "edit_student":  ("adm_no",),
+        "change_class":  ("adm_no", "form_number", "stream"),
+        "remove_student": ("adm_no",),
+        "add_teacher":   ("first_name", "last_name"),
+        "edit_teacher":  ("staff_no",),
+        "remove_teacher": ("staff_no",),
+        "add_parent":    ("adm_no", "guardian"),
+        "link_sibling":  ("parent_id", "adm_no"),
+    }
+
+    def _next_request_reference(self) -> str:
+        n = int(self.get_setting("request_next", "1"))
+        self.set_setting("request_next", str(n + 1))
+        return f"REQ-{n:04d}"
+
+    def submit_registry_request(self, staff_no: str, request_type: str, payload: Dict[str, Any]) -> str:
+        """An executive files a registry change. Locked immediately -- nothing
+        is applied until a registrar approves it."""
+        if not self.has_full_oversight(staff_no):
+            raise PermissionDenied(f"Teacher {staff_no} may not submit registry requests -- only an executive can.")
+        if request_type not in self._REQUEST_TYPES:
+            raise ValueError(f"Unknown request type '{request_type}'.")
+        missing = [f for f in self._REQUEST_TYPES[request_type] if not str(payload.get(f, "")).strip()]
+        if missing:
+            raise ValueError(f"Missing required field(s): {', '.join(missing)}.")
+        ref = self._next_request_reference()
+        self.conn.execute(
+            "INSERT INTO registry_requests(reference, request_type, payload, status, submitted_by, submitted_at) "
+            "VALUES (?,?,?,'submitted',?,?)",
+            (ref, request_type, json.dumps(payload), staff_no, _now()),
+        )
+        self.conn.commit()
+        self._audit("registry_requests", ref, "submit", staff_no, request_type)
+        return ref
+
+    def list_my_requests(self, staff_no: str) -> List[Dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM registry_requests WHERE submitted_by=? ORDER BY id DESC", (staff_no,)
+        ).fetchall()
+        return [dict(r, payload=json.loads(r["payload"])) for r in rows]
+
+    def list_registry_queue(self, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        if status:
+            rows = self.conn.execute(
+                "SELECT * FROM registry_requests WHERE status=? ORDER BY id", (status,)
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """SELECT * FROM registry_requests ORDER BY
+                   CASE status WHEN 'failed' THEN 0 WHEN 'under_review' THEN 1 WHEN 'submitted' THEN 2
+                                WHEN 'approved' THEN 3 WHEN 'rejected' THEN 4 END, id"""
+            ).fetchall()
+        return [dict(r, payload=json.loads(r["payload"])) for r in rows]
+
+    def get_request(self, reference: str) -> Dict[str, Any]:
+        row = self.conn.execute("SELECT * FROM registry_requests WHERE reference=?", (reference,)).fetchone()
+        if not row:
+            raise NotFound(f"No such request '{reference}'.")
+        return dict(row, payload=json.loads(row["payload"]))
+
+    def start_review(self, reference: str, registrar_staff_no: str):
+        if not self.is_registrar(registrar_staff_no):
+            raise PermissionDenied(f"Teacher {registrar_staff_no} may not review registry requests -- registrar only.")
+        req = self.get_request(reference)
+        if req["status"] not in ("submitted", "failed"):
+            raise ValueError(f"{reference} is already {req['status']}.")
+        self.conn.execute(
+            "UPDATE registry_requests SET status='under_review', reviewed_by=?, reviewed_at=? WHERE reference=?",
+            (registrar_staff_no, _now(), reference),
+        )
+        self.conn.commit()
+        self._audit("registry_requests", reference, "under_review", registrar_staff_no, "")
+
+    def _apply_registry_request(self, request_type: str, payload: Dict[str, Any], registrar_staff_no: str):
+        """Dispatches an approved request to the real mutation -- called only
+        from approve_request, acting as the registrar so the normal direct-edit
+        checks pass."""
+        if request_type == "add_student":
+            self.add_student(payload["first_name"], payload["last_name"], int(payload["form_number"]),
+                             payload["stream"], gender=payload.get("gender") or None)
+        elif request_type == "edit_student":
+            self.update_student(payload["adm_no"], first_name=payload.get("first_name") or None,
+                                last_name=payload.get("last_name") or None, gender=payload.get("gender") or None)
+        elif request_type == "change_class":
+            self.update_student(payload["adm_no"], form_number=int(payload["form_number"]),
+                                stream_name_or_code=payload["stream"])
+        elif request_type == "remove_student":
+            self.remove_student_permanently(payload["adm_no"], registrar_staff_no)
+        elif request_type == "add_teacher":
+            new_no = self.add_teacher(payload["first_name"], payload["last_name"], email=payload.get("email") or None)
+            self.generate_temp_password_for(new_no)
+        elif request_type == "edit_teacher":
+            self.update_teacher(payload["staff_no"], new_staff_no=payload.get("new_staff_no") or None,
+                                first_name=payload.get("first_name") or None, last_name=payload.get("last_name") or None)
+        elif request_type == "remove_teacher":
+            self.remove_teacher_permanently(payload["staff_no"], registrar_staff_no)
+        elif request_type == "add_parent":
+            self.create_parent_account(payload["adm_no"], payload["guardian"], registrar_staff_no)
+        elif request_type == "link_sibling":
+            self.link_parent_to_student(int(payload["parent_id"]), payload["adm_no"], requested_by=registrar_staff_no)
+        else:
+            raise ValueError(f"Unknown request type '{request_type}'.")
+
+    def approve_request(self, reference: str, registrar_staff_no: str):
+        """Applies the change automatically. If it can't apply (e.g. a clash),
+        the request is marked 'failed' and stays in the queue rather than
+        half-applying."""
+        if not self.is_registrar(registrar_staff_no):
+            raise PermissionDenied(f"Teacher {registrar_staff_no} may not approve registry requests -- registrar only.")
+        req = self.get_request(reference)
+        if req["status"] not in ("submitted", "under_review", "failed"):
+            raise ValueError(f"{reference} is already {req['status']}.")
+        try:
+            self._apply_registry_request(req["request_type"], req["payload"], registrar_staff_no)
+        except (NotFound, ValueError, PermissionDenied) as e:
+            self.conn.execute(
+                "UPDATE registry_requests SET status='failed', failure_reason=?, reviewed_by=?, reviewed_at=? WHERE reference=?",
+                (str(e), registrar_staff_no, _now(), reference),
+            )
+            self.conn.commit()
+            self._audit("registry_requests", reference, "failed", registrar_staff_no, str(e))
+            return
+        self.conn.execute(
+            "UPDATE registry_requests SET status='approved', reviewed_by=?, reviewed_at=?, applied_at=?, failure_reason=NULL WHERE reference=?",
+            (registrar_staff_no, _now(), _now(), reference),
+        )
+        self.conn.commit()
+        self._audit("registry_requests", reference, "approved", registrar_staff_no, "")
+        try:
+            self.send_message(registrar_staff_no, req["submitted_by"], f"{reference} approved",
+                              f"Your request {reference} ({req['request_type']}) has been approved and applied.")
+        except (NotFound, ValueError):
+            pass
+
+    def reject_request(self, reference: str, registrar_staff_no: str, reason: Optional[str] = None):
+        if not self.is_registrar(registrar_staff_no):
+            raise PermissionDenied(f"Teacher {registrar_staff_no} may not reject registry requests -- registrar only.")
+        req = self.get_request(reference)
+        if req["status"] not in ("submitted", "under_review", "failed"):
+            raise ValueError(f"{reference} is already {req['status']}.")
+        reason = (reason or "").strip() or None
+        self.conn.execute(
+            "UPDATE registry_requests SET status='rejected', rejection_reason=?, reviewed_by=?, reviewed_at=? WHERE reference=?",
+            (reason, registrar_staff_no, _now(), reference),
+        )
+        self.conn.commit()
+        self._audit("registry_requests", reference, "rejected", registrar_staff_no, reason or "")
+        body = "Please submit correct details for the desired change or amendment."
+        if reason:
+            body = reason + " " + body
+        try:
+            self.send_message(registrar_staff_no, req["submitted_by"], f"{reference} rejected", body)
+        except (NotFound, ValueError):
+            pass
+
     def close(self):
         self.conn.close()
 
@@ -1637,8 +1816,8 @@ class SchoolDB:
         etc.) are left as-is -- those rows describe students/events, not the
         teacher, so they're kept for the historical record even though the
         account itself is gone."""
-        if not self.has_full_oversight(requested_by):
-            raise PermissionDenied(f"Teacher {requested_by} may not permanently remove staff -- only an executive can.")
+        if not self.is_registrar(requested_by):
+            raise PermissionDenied(f"Teacher {requested_by} may not amend the registry directly -- submit a request instead.")
         if not self.conn.execute("SELECT 1 FROM teachers WHERE staff_no=?", (staff_no,)).fetchone():
             raise NotFound(f"No such teacher '{staff_no}'.")
 
@@ -1668,9 +1847,9 @@ class SchoolDB:
     def remove_student_permanently(self, adm_no: str, requested_by: str):
         """Hard-deletes a student and everything specifically about them:
         marks, attendance, discipline, fee invoices/payments, pledges, and
-        parent links."""
-        if not self.has_full_oversight(requested_by):
-            raise PermissionDenied(f"Teacher {requested_by} may not permanently remove students -- only an executive can.")
+        parent links. Direct registry mutation -- registrar only."""
+        if not self.is_registrar(requested_by):
+            raise PermissionDenied(f"Teacher {requested_by} may not amend the registry directly -- submit a request instead.")
         if not self.conn.execute("SELECT 1 FROM students WHERE adm_no=?", (adm_no,)).fetchone():
             raise NotFound(f"No such student '{adm_no}'.")
 
@@ -2780,6 +2959,14 @@ class SchoolDB:
         return any(self.has_role(staff_no, r) for r in
                    ("principal", "deputy_principal_academics", "deputy_principal_admin", "dean_of_studies"))
 
+    def is_registrar(self, staff_no: str) -> bool:
+        """The IPRS/eCitizen-style registry gatekeeper. Only a registrar may
+        amend the registry directly (students, teachers, parent accounts) or
+        review/approve/reject a registry request. Holding an executive role
+        (principal, deputy, dean) is NOT enough on its own -- they submit
+        requests instead, same as any other executive in this design."""
+        return any(r["role"] == "registrar" for r in self.get_roles(staff_no))
+
     # ------------------------------------------------------------------
     # departments & HOD
     # ------------------------------------------------------------------
@@ -3128,7 +3315,9 @@ class SchoolDB:
             self.set_parent_password(parent_id, password)
         return parent_id
 
-    def link_parent_to_student(self, parent_id: int, student_adm_no: str):
+    def link_parent_to_student(self, parent_id: int, student_adm_no: str, requested_by: Optional[str] = None):
+        if requested_by is not None and not self.is_registrar(requested_by):
+            raise PermissionDenied(f"Teacher {requested_by} may not amend the registry directly -- submit a request instead.")
         self.conn.execute(
             "INSERT OR IGNORE INTO parent_students(parent_id, student_adm_no) VALUES (?,?)",
             (parent_id, student_adm_no),
@@ -3229,9 +3418,10 @@ class SchoolDB:
     # ---- parent accounts: the username is the student's admission number ----
     def create_parent_account(self, adm_no: str, guardian_name: str, requested_by: str):
         """Creates the parent login for one student (username = admission number) with a
-        temporary password. Returns (parent_id, username, temp_password)."""
-        if not self.has_full_oversight(requested_by):
-            raise PermissionDenied(f"Teacher {requested_by} may not create parent accounts -- only an executive can.")
+        temporary password. Returns (parent_id, username, temp_password).
+        Direct registry mutation -- registrar only."""
+        if not self.is_registrar(requested_by):
+            raise PermissionDenied(f"Teacher {requested_by} may not amend the registry directly -- submit a request instead.")
         student = self.conn.execute("SELECT adm_no FROM students WHERE adm_no=? COLLATE NOCASE", (adm_no.strip(),)).fetchone()
         if not student:
             raise NotFound(f"No such student '{adm_no}'.")
@@ -3273,8 +3463,8 @@ class SchoolDB:
         return out
 
     def remove_parent(self, parent_id: int, requested_by: str):
-        if not self.has_full_oversight(requested_by):
-            raise PermissionDenied(f"Teacher {requested_by} may not remove parent accounts -- only an executive can.")
+        if not self.is_registrar(requested_by):
+            raise PermissionDenied(f"Teacher {requested_by} may not amend the registry directly -- submit a request instead.")
         self.conn.execute("DELETE FROM parent_students WHERE parent_id=?", (parent_id,))
         self.conn.execute("DELETE FROM password_resets WHERE account_type='parent' AND account_id=?", (str(parent_id),))
         self.conn.execute("DELETE FROM parents WHERE id=?", (parent_id,))
