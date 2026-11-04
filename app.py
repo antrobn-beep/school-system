@@ -1699,10 +1699,13 @@ def staff_view():
                     except (PermissionDenied, ValueError) as e:
                         flash(_err(e))
             elif action == "grant_role":
-                if not oversight:
+                role_wanted = request.form["role"]
+                if role_wanted == "registrar" and not registrar:
+                    flash("Not allowed.")
+                elif role_wanted != "registrar" and not oversight:
                     flash("Not allowed.")
                 else:
-                    db.grant_role(request.form["target_staff_no"], request.form["role"],
+                    db.grant_role(request.form["target_staff_no"], role_wanted,
                                    request.form.get("scope", "school"))
                     flash("Role granted.")
             elif action == "class_teacher":
@@ -1743,10 +1746,13 @@ def staff_view():
                     db.revoke_staffing_manager(int(request.form["form_number"]), request.form["target_staff_no"])
                     flash("Staffing delegation revoked.")
             elif action == "revoke_role":
-                if not oversight:
+                role_wanted = request.form["role"]
+                if role_wanted == "registrar" and not registrar:
+                    flash("Not allowed.")
+                elif role_wanted != "registrar" and not oversight:
                     flash("Not allowed.")
                 else:
-                    db.revoke_role(request.form["target_staff_no"], request.form["role"],
+                    db.revoke_role(request.form["target_staff_no"], role_wanted,
                                     request.form.get("scope", "school"))
                     flash("Role revoked.")
             elif action == "set_id_criteria":
@@ -1980,6 +1986,7 @@ def staff_view():
             <option>principal</option><option>deputy_principal_academics</option>
             <option>deputy_principal_admin</option><option>dean_of_studies</option><option>hod</option>
             <option>registrar</option>
+            <option>registrar</option>
           </select>
           Scope (dept code if HOD): <input name="scope" value="school">
           <button type="submit">Grant</button>
@@ -1993,6 +2000,7 @@ def staff_view():
           <select name="role">
             <option>principal</option><option>deputy_principal_academics</option>
             <option>deputy_principal_admin</option><option>dean_of_studies</option><option>hod</option>
+            <option>registrar</option>
           </select>
           Scope (dept code if HOD): <input name="scope" value="school">
           <button type="submit">Revoke</button>
