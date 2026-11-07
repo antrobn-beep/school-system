@@ -1,0 +1,7 @@
+school.db
+*.db
+uploads/
+*.pdf
+.env
+__pycache__/
+*.pyc
