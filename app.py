@@ -4069,8 +4069,13 @@ if IS_PRODUCTION:
     try:
         if _pw and not _db.conn.execute("SELECT 1 FROM teachers WHERE staff_no='admin'").fetchone():
             _db.add_teacher("System", "Administrator", staff_no="admin", password=_pw)
-            for _role in ("principal", "deputy_principal_academics", "deputy_principal_admin", "dean_of_studies"):
+            for _role in ("principal", "deputy_principal_academics", "deputy_principal_admin",
+                          "dean_of_studies", "registrar"):
                 _db.grant_role("admin", _role)
+        # Backfill: an admin account that already existed before 'registrar' was added
+        # (an earlier deploy on the same disk) gets it added here too, every start.
+        if _db.conn.execute("SELECT 1 FROM teachers WHERE staff_no='admin'").fetchone() and not _db.is_registrar("admin"):
+            _db.grant_role("admin", "registrar")
         _problems = []
         if app.secret_key == "dev-secret-change-me":
             _problems.append("SCHOOL_APP_SECRET is not set")
