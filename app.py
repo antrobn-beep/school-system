@@ -4076,6 +4076,13 @@ if IS_PRODUCTION:
         # (an earlier deploy on the same disk) gets it added here too, every start.
         if _db.conn.execute("SELECT 1 FROM teachers WHERE staff_no='admin'").fetchone() and not _db.is_registrar("admin"):
             _db.grant_role("admin", "registrar")
+        # Backfill: an admin account whose password is still the literal 'admin' (e.g. from
+        # running create_admin.py directly against this disk, which always sets 'admin') gets
+        # reset to SCHOOL_ADMIN_PASSWORD here too, every start -- so the fix doesn't depend on
+        # how 'admin' first ended up with that password.
+        if _pw and _pw != "admin" and _db.conn.execute(
+                "SELECT 1 FROM teachers WHERE staff_no='admin'").fetchone() and _db.verify_password("admin", "admin"):
+            _db.set_password("admin", _pw, force_reset=False)
         _problems = []
         if app.secret_key == "dev-secret-change-me":
             _problems.append("SCHOOL_APP_SECRET is not set")
